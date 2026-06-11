@@ -30,7 +30,26 @@ console.log({
 });
 ```
 
-Solana bundles transfer + announce in **one** transaction. Ethereum submits transfer first, then announce (two tx hashes).
+Solana bundles transfer + announce in **one** transaction (unless the announcement is
+delayed, see below). Ethereum submits the transfer first, then the announce (two tx hashes).
+
+### Delayed announcement (anonymity set)
+
+Set `delayAnnouncement` (ms) to decouple the transfer from the announcement and break
+the timing correlation between the two on-chain events:
+
+```ts
+const result = await client.sendStealthPayment({
+  chain: "ethereum",
+  recipient,
+  amount: parseEther("0.01"),
+  delayAnnouncement: 5 * 60_000,   // announce 5 minutes later
+});
+const announceTx = await result.announcePromise;  // keep the process alive until this resolves
+```
+
+See [Anonymity utilities](/sdk/stealth-api#anonymity-utilities) for dummy-announcement
+noise as well.
 
 ### Cross-chain send
 
@@ -56,10 +75,10 @@ if (!metaAddressHex) throw new Error("Not registered");
 // 2. Derive stealth material
 const send = client.prepareStealthSend(metaAddressHex);
 /*
-  send.stealthAddress      — fund this address
-  send.ephemeralPublicKey  — goes in announce
-  send.ephemeralPrivateKey — store if you need ghost/relay later
-  send.metadata            — view tag byte (+ PSR extension if applicable)
+  send.stealthAddress      -> fund this address
+  send.ephemeralPublicKey  -> goes in announce
+  send.ephemeralPrivateKey -> store if you need ghost/relay later
+  send.metadata            -> view tag byte (+ PSR extension if applicable)
 */
 
 // 3. Transfer
@@ -94,7 +113,7 @@ On Solana, `buildAnnounceWithRelay` returns instructions + extra signers (Wormho
 
 ```ts
 const relay = await client.buildAnnounceWithRelay("solana", send);
-// relay.instructions, relay.signers — co-sign with solanaWallet
+// relay.instructions, relay.signers: co-sign with solanaWallet
 ```
 
 ## Limitations
@@ -105,8 +124,14 @@ const relay = await client.buildAnnounceWithRelay("solana", send);
 
 ## Recipient resolution
 
+`recipient` accepts every identity form `client.resolveRecipient` understands:
+
 | `recipient` value | Behavior |
 | --- | --- |
-| 66-byte meta-address (`0x` + 132 hex) | Used directly |
+| 66-byte meta-address (`0x` + 132 hex, `st:opq:` prefix accepted) | Validated and used directly |
 | Ethereum `0x` address | Registry lookup on Ethereum |
 | Solana base58 pubkey | Registry lookup on Solana |
+| `ipfs://CID` | DID document fetch (configure `ipfs` on the client) |
+| `*.eth` name | ENS `com.opaque.meta` text record (configure `ens` on the client) |
+
+See [resolveRecipient](/sdk/stealth-api#resolverecipientinput) for setup details.

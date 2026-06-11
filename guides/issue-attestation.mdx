@@ -1,6 +1,6 @@
 ---
 title: Issue an attestation
-description: End-to-end issuer flow — attest to a stealth identity and announce for discovery.
+description: End-to-end issuer flow, from attesting to a stealth identity to announcing for discovery.
 ---
 
 ## Prerequisites
@@ -45,13 +45,13 @@ const found = issued.find((a) => a.uid === result.uid);
 ## Recipient formats
 
 ```ts
-// Meta-address — full announce path
+// Meta-address: full announce path
 recipient: "0x" + "04".repeat(66)  // 132 hex chars
 
-// Raw EVM stealth address — resolves to stealth_address_hash
+// Raw EVM stealth address: resolves to stealth_address_hash
 recipient: "0x" + "ab".repeat(20)
 
-// Precomputed hash — no announce (no ephemeral key available)
+// Precomputed hash: no announce (no ephemeral key available)
 recipient: "0x" + "cd".repeat(32)
 ```
 
@@ -74,16 +74,20 @@ const metadata = client.encodeReputationMetadata(viewTag, attestationId);
 ## Verify issuance
 
 ```ts
+import { decodeAttestationData, parseFieldDefs } from "@opaquecash/opaque";
+
 const attestations = await client.getMyIssuedAttestations("ethereum");
 
 for (const a of attestations) {
-  console.log(a.uid, a.schemaId, a.stealthAddressHash, a.fieldValues);
+  // AttestationV2 carries the raw encoded payload; decode it with the schema's fields.
+  const fields = decodeAttestationData(a.dataHex, parseFieldDefs(schema.fieldDefinitions));
+  console.log(a.uid, a.schemaId, a.stealthAddressHash, fields);
 }
 ```
 
 ## Solana
 
-Same API — pass `chain: "solana"`:
+Same API; pass `chain: "solana"`:
 
 ```ts
 await client.issueAttestation("solana", {

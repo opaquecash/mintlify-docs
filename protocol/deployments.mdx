@@ -1,18 +1,49 @@
 ---
 title: Testnet deployments
-description: Bundled contract and program addresses in the SDK.
+description: The generated @opaquecash/deployments registry and the bundled addresses.
 ---
 
-Do not hardcode addresses in your app — read them from the SDK.
+Do not hardcode addresses in your app; read them from the SDK. All bundled addresses
+come from one generated package, `@opaquecash/deployments`, which the chain repos emit
+from their canonical deployment records:
+
+| Source of truth | Generator | Output |
+| --- | --- | --- |
+| `ethereum/infra/deployments/*.json` + hardhat artifacts | `npm run generate` in `ethereum/infra` | EVM addresses + contract ABIs |
+| `solana/Anchor.toml` program tables | `npm run generate` in `solana` | Program ids + Wormhole core per cluster |
+
+A redeploy is therefore a regenerate + rebuild, never a code change. Higher SDK
+packages (`@opaquecash/opaque`, `uab`, `stealth-chain-solana`, `psr-chain`) and the
+reference app all source their addresses from it.
+
+## Reading addresses
+
+Most apps use the convenience getters re-exported from `@opaquecash/opaque`:
 
 ```ts
 import { getChainDeployment, getSolanaDeployment } from "@opaquecash/opaque";
 
-const evm = getChainDeployment(11155111);
-const sol = getSolanaDeployment("devnet");
+const evm = getChainDeployment(11155111);   // registry, announcer, verifier, tokens
+const sol = getSolanaDeployment("devnet");  // program ids as PublicKey
 ```
 
-Override any address via `OpaqueClient.create({ contracts: { … } })`.
+Or read the registry directly (string ids, zero dependencies):
+
+```ts
+import {
+  requireEvmDeployment,
+  requireSolanaProgramIds,
+  stealthAddressAnnouncerAbi,   // generated ABIs ship here too
+} from "@opaquecash/deployments";
+
+const evm = requireEvmDeployment(11155111);
+// evm.contracts.{stealthMetaAddressRegistry, uabSender, ...}, evm.wormhole, evm.tokens
+
+const sol = requireSolanaProgramIds("devnet");
+// sol.{stealthRegistry, stealthAnnouncer, uabReceiver, wormholeCore, ...}
+```
+
+Override any address per client via `OpaqueClient.create({ contracts: { ... } })`.
 
 ## Ethereum Sepolia (`chainId: 11155111`)
 
@@ -22,11 +53,18 @@ Override any address via `OpaqueClient.create({ contracts: { … } })`.
 | StealthAddressAnnouncer | `0x840f72249A8bF6F10b0eB64412E315efBD730865` |
 | UABSender | `0x872787c0BD1A0C71e6D1be5a144EB044e0CB2069` |
 | UABReceiver | `0x9eF189f7a263F870Cf80f9A89d1349A6AF7b15cF` |
+| Wormhole Core Bridge (external) | `0x4a8bc80Ed5a4067f1CCf107057b8270E0cC11A78` |
 | OpaqueSchemaRegistry | `0xAA5F3942117bD48E7Cd81A500A8b7Bbb122ae80f` |
 | AttestationRegistry (V2) | `0x049aF9CBB62387034CDd5403794a94E9c000ACCc` |
 | OpaqueReputationVerifier (V2) | `0x18cEc2812953c2E9bcADE20CbF6415BD36aEb44f` |
+| Groth16Verifier (V2) | `0x49A212bdbc52F1cb6C93623FC7814a61Fc71ddB5` |
 
-UAB deployment details: `getUabDeployment(11155111)` from `@opaquecash/opaque`.
+Default tracked tokens: native ETH plus testnet `USDC`
+(`0x73197e8303904862d543f9706E8422F634D713cb`) and `USDT`
+(`0x6Ff8Afb2aA9eB5A89Ce86c44DD460bD17C92f644`).
+
+UAB deployment details (Wormhole chain ids, fromBlock): `getUabDeployment(11155111)`
+from `@opaquecash/opaque`.
 
 ## Solana devnet
 
@@ -38,6 +76,8 @@ UAB deployment details: `getUabDeployment(11155111)` from `@opaquecash/opaque`.
 | AttestationEngineV2 | `4T9kPCVCFGdEuLpEqRJihsPCbEEo2LWWDEPFvUESEqtM` |
 | Groth16Verifier | `6mFaKyp7F4NqNeoiBLEWSqy5wJSk7rWf1EYumVXgHvhQ` |
 | ReputationVerifier | `BSnkCDoTpgNVN5BbF3aN5L5EJPiaYUkqqj9MHp8kaqWM` |
+| UAB Receiver | `7d4Sbmmpy954JwSNdjwf31pgbeWUQqwpgNdte5iy3vuM` |
+| Wormhole Core Bridge (external) | `3u8hJUVTA4jH1wYAyUur7FFZVQ8H635K3tSHHF4ssjQ5` |
 
 ```ts
 import { getSolanaDeployment } from "@opaquecash/opaque";
@@ -49,7 +89,9 @@ console.log(d.schemaRegistry, d.attestationEngineV2);
 ## Supported chain IDs
 
 ```ts
-OpaqueClient.supportedChainIds();  // [11155111] in current SDK version
+OpaqueClient.supportedChainIds();  // [11155111] in the current SDK version
 ```
 
-Mainnet deployments will ship in `@opaquecash/deployments` (roadmap).
+Mainnet addresses will land in the same registry when they deploy: the chain repos run
+`npm run generate` against the mainnet records, and every consumer picks them up on
+rebuild.

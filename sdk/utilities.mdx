@@ -24,6 +24,50 @@ import {
 | `deriveKeysFromSignature` | Viewing + spending keys from signature hex |
 | `computeStealthAddressAndViewTag` | One-time destination from meta-address |
 | `stealthMetaAddressToHex` | Encode meta-address to 66-byte hex |
+| `generateRandomMetaAddress` | Fresh throwaway meta-address (decoy recipients) |
+
+---
+
+## Unified signer
+
+```ts
+import {
+  requestSetupSignature,
+  selectSigner,
+} from "@opaquecash/opaque";
+
+import type {
+  UnifiedSigner,
+  EvmUnifiedSigner,
+  SolanaUnifiedSigner,
+} from "@opaquecash/opaque";
+```
+
+One adapter shape over EIP-1193, viem `WalletClient`, and Solana wallet-adapter.
+`requestSetupSignature(signer)` prompts for the `SETUP_MESSAGE` signature; pass the
+same shapes to `OpaqueClient.fromWallet`. See [OpaqueClient overview](/sdk/opaque-client#unified-signer).
+
+---
+
+## Recipient resolution
+
+```ts
+import {
+  parseMetaAddressValue,
+  extractMetaAddressFromDidDocument,
+  ipfsPathFromInput,
+  resolveIpfsDidMetaAddress,
+  resolveEnsMetaAddress,
+  OPAQUE_META_RECORD_KEY,      // "com.opaque.meta"
+  META_ADDRESS_VALUE_PREFIX,   // "st:opq:"
+  DEFAULT_IPFS_GATEWAYS,
+} from "@opaquecash/opaque";
+
+import type { ResolvedRecipient, ResolvedRecipientSource } from "@opaquecash/opaque";
+```
+
+Building blocks behind [`client.resolveRecipient`](/sdk/stealth-api#resolverecipientinput).
+`parseMetaAddressValue` validates that both 33-byte halves are real curve points.
 
 ---
 
@@ -40,6 +84,10 @@ import {
 const ids = getSupportedChainIds();           // [11155111]
 const dep = getChainDeployment(11155111);   // registry, announcer, verifier, tokens
 ```
+
+These getters read the generated `@opaquecash/deployments` registry; import that
+package directly for raw addresses, ABIs, and Solana program ids. See
+[Deployments](/protocol/deployments).
 
 ---
 
@@ -124,6 +172,9 @@ Default Groth16 wasm/zkey URLs point to opaque.cash `/circuits/...`.
 | Type | Description |
 | --- | --- |
 | `OpaqueClientConfig` | Client construction |
+| `UnifiedSigner` | One wallet shape for `fromWallet` / `requestSetupSignature` |
+| `ResolvedRecipient` | `resolveRecipient` result with `source` tag |
+| `DummyAnnouncement` | Decoy announcement from `generateDummyAnnouncements` |
 | `OpaqueScanChain` | `"ethereum" \| "solana"` |
 | `PsrChain` | Same as `OpaqueScanChain` |
 | `UnifiedOwnedOutput` | Scan result with chain + source tags |

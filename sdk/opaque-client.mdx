@@ -7,9 +7,54 @@ description: Construction, configuration, and method index for the unified SDK c
 
 ## Construction
 
+### `OpaqueClient.fromWallet(params)` (recommended)
+
+Pass the connected wallet(s) in the unified signer shape. The client prompts for the
+one-time `SETUP_MESSAGE` signature (or reuses a cached one), derives the stealth keys,
+and wires each wallet as that chain's write signer:
+
 ```ts
 import { OpaqueClient } from "@opaquecash/opaque";
 
+// Browser, Ethereum wallet
+const client = await OpaqueClient.fromWallet({
+  wallets: { chain: "ethereum", address: userAddress, provider: window.ethereum },
+  chainId: 11155111,
+  rpcUrl: "https://ethereum-sepolia-rpc.publicnode.com",
+  wasmModuleSpecifier: "/pkg/cryptography.js",
+});
+
+// Both chains at once (Solana wallet-adapter + viem WalletClient)
+const dual = await OpaqueClient.fromWallet({
+  wallets: [
+    { chain: "ethereum", address: userAddress, walletClient },
+    { chain: "solana", publicKey, signMessage, signTransaction },
+  ],
+  chainId: 11155111,
+  rpcUrl,
+  solana: { cluster: "devnet" },
+});
+```
+
+The FIRST wallet in the list signs `SETUP_MESSAGE` (key derivation) unless you pass a
+cached `walletSignature`, in which case no prompt happens at all:
+
+```ts
+const restored = await OpaqueClient.fromWallet({
+  wallets: [],                  // allowed when walletSignature is provided
+  walletSignature: cachedSignature,
+  chainId: 11155111,
+  rpcUrl,
+});
+```
+
+See [Unified signer](#unified-signer) below for the wallet shapes.
+
+### `OpaqueClient.create(config)` (manual)
+
+Use `create` when you already hold the setup signature and want to wire signers yourself:
+
+```ts
 const client = await OpaqueClient.create(config);
 ```
 
@@ -21,7 +66,7 @@ const client = await OpaqueClient.create(config);
 | --- | --- | --- | --- |
 | `chainId` | `number` | Yes | EVM chain id (`11155111` Sepolia). Must be in `getSupportedChainIds()` unless contracts overridden. |
 | `rpcUrl` | `string` | Yes | HTTP RPC for EVM reads and sweep |
-| `walletSignature` | `Hex` | Yes | HKDF entropy from `SETUP_MESSAGE` signature — never sent on-chain |
+| `walletSignature` | `Hex` | Yes | HKDF entropy from the `SETUP_MESSAGE` signature; never sent on-chain |
 | `ethereumAddress` | `Address` | Yes | Connected EOA (registrant context, PSR issuer on EVM) |
 | `wasmModuleSpecifier` | `string` | No* | URL to `cryptography.js`. *Required for scan/sweep/prove |
 | `trackedTokens` | `TrackedToken[]` | No | Extra ERC-20s for balance aggregation |
@@ -30,6 +75,32 @@ const client = await OpaqueClient.create(config);
 | `ethereumProvider` | `EIP1193Provider` | No*** | ***For EVM writes if no `ethereumWalletClient` |
 | `ethereumWalletClient` | `WalletClient` | No*** | Precedence over provider for EVM writes |
 | `solanaWallet` | `{ publicKey, signTransaction }` | No**** | ****Required for Solana writes |
+| `ens` | `{ client?, getText? }` | No | ENS read access for `resolveRecipient` of `*.eth` names (an ENS-capable viem client, or a custom text-record reader) |
+| `ipfs` | `{ gateways?, fetch? }` | No | Gateway list + fetch override for `resolveRecipient` of `ipfs://` DID documents |
+
+## Unified signer
+
+`UnifiedSigner` is one shape over every supported wallet type. Pass it to `fromWallet`,
+or use `requestSetupSignature` directly when you manage sessions yourself:
+
+```ts
+import { requestSetupSignature, type UnifiedSigner } from "@opaquecash/opaque";
+
+// Ethereum: EIP-1193 provider or a viem WalletClient
+const eth: UnifiedSigner = { chain: "ethereum", address, provider: window.ethereum };
+const ethViem: UnifiedSigner = { chain: "ethereum", address, walletClient };
+
+// Solana: wallet-adapter shape
+const sol: UnifiedSigner = { chain: "solana", publicKey, signMessage, signTransaction };
+
+const signature = await requestSetupSignature(eth);  // personal_sign over SETUP_MESSAGE
+```
+
+| Field | Ethereum | Solana |
+| --- | --- | --- |
+| Identity | `address` | `publicKey` (base58 string or `PublicKey`) |
+| Setup signature | `provider` (personal_sign) or `walletClient` | `signMessage` |
+| Transaction signing | same `provider` / `walletClient` | `signTransaction` |
 
 ### Static helpers
 
@@ -37,14 +108,14 @@ const client = await OpaqueClient.create(config);
 | --- | --- | --- |
 | `OpaqueClient.supportedChainIds()` | `number[]` | Bundled EVM chain ids |
 | `OpaqueClient.chainDeployment(chainId)` | `OpaqueChainDeployment \| undefined` | Contract addresses + default tokens |
-| `OpaqueClient.buildReputationActionScope(chainId, module, actionId)` | `string` | Action scope string |
-| `OpaqueClient.reputationExternalNullifierFromScope(scope)` | `string` | Circuit external nullifier |
+| `OpaqueClient.buildReputationActionScope({ chainId, module, actionId })` | `string` | Action scope string |
+| `OpaqueClient.reputationExternalNullifierFromScope(scope)` | `bigint` | Circuit external nullifier |
 
 ## Method index
 
 <CardGroup cols={2}>
   <Card title="Stealth API" icon="eye-slash" href="/sdk/stealth-api">
-    Registry, send, scan, sweep, ghost receive
+    Registry, recipient resolution, send, scan, sweep, anonymity utilities
   </Card>
   <Card title="PSR API" icon="certificate" href="/sdk/psr-api">
     Schemas, attestations, delegates
@@ -55,8 +126,11 @@ const client = await OpaqueClient.create(config);
   <Card title="Cross-chain API" icon="arrow-right-arrow-left" href="/sdk/cross-chain-api">
     UAB relay and cross-chain scan
   </Card>
+  <Card title="React hooks" icon="atom" href="/sdk/react">
+    OpaqueProvider, useScan, useStealthBalance
+  </Card>
   <Card title="Utilities" icon="wrench" href="/sdk/utilities">
-  Exported helpers, types, adapters
+    Exported helpers, types, adapters
   </Card>
 </CardGroup>
 
@@ -65,7 +139,7 @@ const client = await OpaqueClient.create(config);
 ```ts
 client.getChainId()           // number
 client.getEthereumAddress()   // Address
-client.getMetaAddressHex()    // Hex — 66-byte meta-address
+client.getMetaAddressHex()    // Hex, the 66-byte meta-address
 client.getContracts()         // { stealthMetaAddressRegistry, stealthAddressAnnouncer, opaqueReputationVerifier? }
 ```
 
@@ -73,11 +147,11 @@ client.getContracts()         // { stealthMetaAddressRegistry, stealthAddressAnn
 
 | Category | Methods | Ethereum signer | Solana signer | WASM |
 | --- | --- | --- | --- | --- |
-| Read-only stealth | `resolveRecipientMetaAddress`, `isMetaAddressRegistered` | — | `solana` for Solana check | — |
-| Stealth writes | `registerMetaAddress`, `sendStealthPayment` | ✓ | ✓ | — |
-| Scan / sweep | `scan`, `sweep`, `filterOwnedAnnouncements`, balances | — | `solana` | ✓ |
-| PSR admin | `createSchema`, `issueAttestation`, … | ✓ (EVM) | ✓ (Solana) | — |
-| Reputation | `discoverTraits`, `generateReputationProof`, `submitReputationVerification` | ✓ (submit EVM) | ✓ (submit Solana) | ✓ |
+| Read-only stealth | `resolveRecipient`, `resolveRecipientMetaAddress`, `isMetaAddressRegistered` | no | `solana` for Solana check | no |
+| Stealth writes | `registerMetaAddress`, `sendStealthPayment` | yes | yes | no |
+| Scan / sweep | `scan`, `sweep`, `filterOwnedAnnouncements`, balances | no | `solana` | yes |
+| PSR admin | `createSchema`, `issueAttestation`, ... | yes (EVM) | yes (Solana) | no |
+| Reputation | `discoverTraits`, `generateReputationProof`, `submitReputationVerification` | yes (submit EVM) | yes (submit Solana) | yes |
 
 ## Error: WASM not configured
 

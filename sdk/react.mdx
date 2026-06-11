@@ -1,0 +1,147 @@
+---
+title: React hooks
+description: "@opaquecash/react: OpaqueProvider, useOpaqueClient, useScan, and useStealthBalance."
+---
+
+`@opaquecash/react` wraps the SDK client in idiomatic React hooks. It has a single
+peer dependency (`react >= 18`) and works with any wallet stack (wagmi, RainbowKit,
+Solana wallet-adapter, or your own).
+
+## Install
+
+```bash
+npm install @opaquecash/react @opaquecash/opaque
+```
+
+## Provide the client
+
+Build the client with `OpaqueClient.fromWallet` when the user connects, keep it in
+state, and hand it to `OpaqueProvider`. Pass `null` while the session is connecting;
+the hooks stay idle until a client arrives.
+
+```tsx
+import { useState } from "react";
+import { OpaqueClient } from "@opaquecash/opaque";
+import { OpaqueProvider } from "@opaquecash/react";
+
+function App({ children }) {
+  const [client, setClient] = useState<OpaqueClient | null>(null);
+
+  async function connect() {
+    setClient(
+      await OpaqueClient.fromWallet({
+        wallets: { chain: "ethereum", address, provider: window.ethereum },
+        chainId: 11155111,
+        rpcUrl,
+        wasmModuleSpecifier: "/pkg/cryptography.js",
+        solana: { cluster: "devnet" },
+      }),
+    );
+  }
+
+  return <OpaqueProvider client={client}>{children}</OpaqueProvider>;
+}
+```
+
+<Note>
+  Rebuild the client (and call `setClient`) when the connected wallets change. Pass the
+  cached `walletSignature` to `fromWallet` so the rebuild does not prompt for a new
+  signature; the hooks re-run automatically because the context value changed.
+</Note>
+
+## `useOpaqueClient()` / `useOpaqueClientOrNull()`
+
+```tsx
+import { useOpaqueClient, useOpaqueClientOrNull } from "@opaquecash/react";
+
+function Account() {
+  const client = useOpaqueClient();          // throws outside a connected provider
+  return <code>{client.getMetaAddressHex()}</code>;
+}
+
+function Gate({ children }) {
+  const client = useOpaqueClientOrNull();    // null while disconnected
+  return client ? children : <ConnectButton />;
+}
+```
+
+## `useScan(options?)`
+
+Scan the unified cross-chain inbox. Scans once on mount (and whenever the client or
+options change); set `pollInterval` to keep it fresh.
+
+```tsx
+import { useScan } from "@opaquecash/react";
+
+function Inbox() {
+  const { outputs, loading, error, refresh } = useScan({
+    chains: ["ethereum", "solana"],   // default: both
+    pollInterval: 30_000,             // optional ms; omit for scan-once
+    // fromBlock, toBlock, solanaLimit, includeCrossChain, paused
+  });
+
+  if (error) return <Retry onClick={refresh} message={error.message} />;
+  return (
+    <ul>
+      {outputs.map((o) => (
+        <li key={`${o.chain}:${o.stealthAddress}`}>
+          [{o.chain}] {o.stealthAddress} ({o.source})
+        </li>
+      ))}
+      {loading && <Spinner />}
+    </ul>
+  );
+}
+```
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `chains` | `["ethereum", "solana"]` | Chains to scan |
+| `pollInterval` | scan once | Re-scan interval in ms |
+| `paused` | `false` | Skip scanning while true (e.g. tab hidden) |
+| `fromBlock` / `toBlock` / `solanaLimit` / `includeCrossChain` | adapter defaults | Same as `client.scan` |
+
+Returns `{ outputs, loading, error, refresh }`.
+
+## `useStealthBalance(outputs)`
+
+Resolve the native balance of each owned output (typically the `outputs` from
+`useScan`). Refetches when the output set or client changes.
+
+```tsx
+import { useScan, useStealthBalance } from "@opaquecash/react";
+import { formatEther } from "viem";
+
+function Balances() {
+  const { outputs } = useScan();
+  const { balances, totals, loading } = useStealthBalance(outputs);
+
+  return (
+    <div>
+      <p>Ethereum total: {formatEther(totals.ethereum)} ETH</p>
+      <p>Solana total: {Number(totals.solana) / 1e9} SOL</p>
+      {balances.map((b) => (
+        <div key={b.address}>{b.address}: {b.nativeRaw.toString()}</div>
+      ))}
+      {loading && <Spinner />}
+    </div>
+  );
+}
+```
+
+Returns `{ balances, totals: { ethereum, solana }, loading, error }` with amounts in
+base units (wei / lamports).
+
+## Writes
+
+The hooks cover the read side. For sends, sweeps, registration, and PSR writes, call
+the client directly from event handlers:
+
+```tsx
+const client = useOpaqueClient();
+
+async function onSend() {
+  await client.sendStealthPayment({ chain: "ethereum", recipient, amount });
+  refresh();  // from useScan
+}
+```

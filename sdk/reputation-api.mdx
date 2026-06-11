@@ -71,20 +71,24 @@ Generate Groth16 proof bundle (requires `snarkjs`).
 ```ts
 import { buildActionScope, externalNullifierFromScope } from "@opaquecash/opaque";
 
-const scope = buildActionScope(11155111, "my-dapp", "gate-v1");
-const externalNullifier = externalNullifierFromScope(scope);
+const scope = buildActionScope({ chainId: 11155111, module: "my-dapp", actionId: "gate-v1" });
+const externalNullifier = externalNullifierFromScope(scope);  // bigint
 
 const proofData = await client.generateReputationProof({
   trait,
   stealthPrivKeyBytes,
-  externalNullifier,
-  attestationsJson: client.announcementsJsonForReputationWitness(rows),
-  artifacts: undefined,   // default hosted circuit paths
+  externalNullifier: externalNullifier.toString(),
+  artifacts: undefined,   // default hosted circuit paths; or { wasmPath, zkeyPath }
   onProgress: (stage, pct) => console.log(stage, pct),
 });
 ```
 
-**Returns:** `ProofData` — `{ proof, nullifier, attestationId, ... }`
+Optional inputs `issuerPkX`, `traitDataHash`, and `nonce` pin the V2 leaf fields; in
+dev mode the prover fills deterministic defaults.
+
+**Returns:** `ProofData`: `{ proof, publicSignals, nullifier, attestationId }`. The
+public signals are `[merkle_root, attestation_id, external_nullifier, nullifier_hash]`
+and `nullifier` carries `nullifier_hash`.
 
 ---
 
@@ -125,7 +129,7 @@ const history = await client.fetchReputationRootHistory();
 
 ### `verifyReputationProofView(args)`
 
-Read-only on-chain view — does not consume nullifier.
+Read-only on-chain view; does not consume the nullifier.
 
 ```ts
 const valid = await client.verifyReputationProofView({
@@ -153,7 +157,7 @@ await client.simulateReputationVerification(walletClient, {
 
 ### `submitReputationVerification(chain, args)`
 
-Broadcast proof to verifier — **consumes nullifier** on success.
+Broadcast the proof to the verifier. **Consumes the nullifier** on success.
 
 ```ts
 const { txHash } = await client.submitReputationVerification("ethereum", {
@@ -170,8 +174,12 @@ const { txHash } = await client.submitReputationVerification("ethereum", {
 ## Static scope helpers
 
 ```ts
-const scope = OpaqueClient.buildReputationActionScope(11155111, "module", "action");
-const nullifier = OpaqueClient.reputationExternalNullifierFromScope(scope);
+const scope = OpaqueClient.buildReputationActionScope({
+  chainId: 11155111,
+  module: "module",
+  actionId: "action",
+});
+const nullifier = OpaqueClient.reputationExternalNullifierFromScope(scope);  // bigint
 ```
 
 Equivalent to `buildActionScope` / `externalNullifierFromScope` from `@opaquecash/psr-core`.

@@ -15,6 +15,8 @@ Peer dependencies you typically also need:
 | --- | --- |
 | `viem` | Ethereum reads/writes, wallet clients |
 | `@solana/web3.js` | Solana reads/writes (re-exported transitively) |
+| `@opaquecash/react` | React apps: provider + hooks over the client ([React hooks](/sdk/react)) |
+| `@opaquecash/deployments` | Raw generated addresses/ABIs/program ids ([Deployments](/protocol/deployments)) |
 
 ## WASM module
 
@@ -38,7 +40,7 @@ wasm-pack build --target web --out-dir pkg --out-name cryptography
 Serve `pkg/cryptography.js` and `pkg/cryptography_bg.wasm` from your app's `public/` directory. The glue file loads the `.wasm` sibling automatically.
 
 <Warning>
-  Do not hotlink `https://www.opaque.cash/pkg/cryptography.js` in production — self-host the artifact so deploys are not blocked by CORS or third-party availability.
+  Do not hotlink `https://www.opaque.cash/pkg/cryptography.js` in production. Self-host the artifact so deploys are not blocked by CORS or third-party availability.
 </Warning>
 
 ### PSR admin without WASM
@@ -123,3 +125,21 @@ Link the local package during development:
 ```
 
 Build the SDK first: `cd sdk && npm install && npm run build`.
+
+## Runnable examples
+
+[`sdk/examples/`](https://github.com/opaquecash/sdk/tree/main/examples) ships one
+runnable script per flow:
+
+| Example | Flow |
+| --- | --- |
+| `from-wallet.ts` | Build a client from a unified signer (offline) |
+| `scan.ts` | Unified cross-chain inbox scan + balances (read-only) |
+| `send.ts` | Stealth send with optional delayed announcement (spends testnet ETH) |
+| `psr-prove.ts` | Generate and verify a Groth16 reputation proof (offline) |
+| `uab-readonly.ts` | Build a cross-chain announce request + read UAB inbox (read-only) |
+
+```bash
+cd sdk && npm run build
+npx tsx examples/from-wallet.ts
+```

@@ -95,6 +95,7 @@
               "sdk/psr-api",
               "sdk/reputation-api",
               "sdk/cross-chain-api",
+              "sdk/react",
               "sdk/utilities"
             ]
           },
@@ -129,6 +130,12 @@
     }
   },
   "contextual": {
-    "options": ["copy", "view", "chatgpt", "claude", "cursor"]
+    "options": [
+      "copy",
+      "view",
+      "chatgpt",
+      "claude",
+      "cursor"
+    ]
   }
 }

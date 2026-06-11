@@ -1,6 +1,6 @@
 ---
 title: Opaque Protocol
-description: Stealth payments, provable reputation, and cross-chain announcements — one TypeScript SDK.
+description: Stealth payments, provable reputation, and cross-chain announcements in one TypeScript SDK.
 ---
 
 Opaque is a cross-chain privacy stack for unlinkable payments and zero-knowledge reputation. Configure one client (`@opaquecash/opaque`) and integrate stealth sends, PSR attestations, inbox scanning, and Groth16 proofs without touching chain-specific libraries directly.
@@ -10,7 +10,7 @@ Opaque is a cross-chain privacy stack for unlinkable payments and zero-knowledge
     Install the SDK, derive keys, and run your first flow in five minutes.
   </Card>
   <Card title="OpaqueClient reference" icon="code" href="/sdk/opaque-client">
-    Full API for the unified client — stealth, PSR, reputation, and UAB.
+    Full API for the unified client: stealth, PSR, reputation, and UAB.
   </Card>
   <Card title="Create a schema" icon="layer-group" href="/guides/create-schema">
     Register a PSR schema and issue attestations on Ethereum or Solana.
@@ -46,8 +46,12 @@ flowchart LR
 | Ethereum Sepolia | `11155111` | Stealth, PSR V2, UAB, reputation verifier |
 | Solana devnet | `devnet` | Stealth, PSR V2, reputation verifier |
 
-Contract addresses ship inside the SDK — see [Deployments](/protocol/deployments). Override any address via `OpaqueClient.create({ contracts: { … } })`.
+Contract addresses ship inside the SDK (see [Deployments](/protocol/deployments)). Override any address via `OpaqueClient.create({ contracts: { ... } })`.
 
 ## Packages
 
-Most apps only need **`@opaquecash/opaque`**. Lower-level packages (`stealth-chain`, `psr-core`, `uab`, etc.) are re-exported when you need a narrow surface. See [Installation](/sdk/installation).
+Most apps only need **`@opaquecash/opaque`** (plus **`@opaquecash/react`** for React
+apps). Contract addresses and program ids ship in the generated
+**`@opaquecash/deployments`** registry. Lower-level packages (`stealth-chain`,
+`psr-core`, `uab`, etc.) are re-exported when you need a narrow surface. See
+[Installation](/sdk/installation).

@@ -5,7 +5,7 @@ description: CSAP, PSR, and UAB specifications and how they fit together.
 
 Opaque Protocol is documented in the [`opaquecash/spec`](https://github.com/opaquecash/spec) repository. The SDK implements these three layers:
 
-## CSAP — Confidential Stealth Address Protocol
+## CSAP: Confidential Stealth Address Protocol
 
 [EIP-5564](https://eips.ethereum.org/EIPS/eip-5564) stealth addresses with Opaque's DKSAP key derivation (`opaque-cash-v1` HKDF).
 
@@ -19,9 +19,9 @@ Opaque Protocol is documented in the [`opaquecash/spec`](https://github.com/opaq
 
 ---
 
-## PSR — Provable Stealth Reputation
+## PSR: Provable Stealth Reputation
 
-Schema registry, attestation engine, and Groth16 reputation verifier. Attestations bind to `stealth_address_hash` — not a public EOA.
+Schema registry, attestation engine, and Groth16 reputation verifier. Attestations bind to `stealth_address_hash`, not a public EOA.
 
 - V2 schemas with ABI-style field definitions
 - Delegated issuance (up to 10 delegates)
@@ -34,7 +34,7 @@ Schema registry, attestation engine, and Groth16 reputation verifier. Attestatio
 
 ---
 
-## UAB — Universal Announcement Bus
+## UAB: Universal Announcement Bus
 
 Cross-chain relay of 96-byte stealth announcement payloads over Wormhole.
 
@@ -57,4 +57,4 @@ Cross-chain relay of 96-byte stealth announcement payloads over Wormhole.
 | [`opaquecash/ethereum`](https://github.com/opaquecash/ethereum) | EVM contracts |
 | [`opaquecash/solana`](https://github.com/opaquecash/solana) | Solana programs |
 | [`opaquecash/relayer`](https://github.com/opaquecash/relayer) | UAB VAA relayer |
-| [`opaquecash/scanner`](https://github.com/opaquecash/scanner) | Rust→WASM cryptography crate |
+| [`opaquecash/scanner`](https://github.com/opaquecash/scanner) | Rust cryptography crate: WASM scanner for browsers, plus a universal scanner with Ethereum/Solana JSON-RPC adapters behind the `native` cargo feature for Rust wallets |

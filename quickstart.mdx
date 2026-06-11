@@ -3,7 +3,7 @@ title: Quickstart
 description: Install @opaquecash/opaque, derive stealth keys, and run a minimal send/receive flow.
 ---
 
-This guide takes you from zero to a working integration: install the SDK, create an `OpaqueClient`, register your meta-address, and prepare a stealth send.
+This guide takes you from zero to a working integration: install the SDK, create an `OpaqueClient` from a connected wallet, register your meta-address, and run a stealth send.
 
 ## Prerequisites
 
@@ -18,40 +18,41 @@ This guide takes you from zero to a working integration: install the SDK, create
 npm install @opaquecash/opaque viem
 ```
 
-## 2. Derive keys from a wallet signature
+## 2. Create the client from a wallet
 
-Opaque derives viewing and spending keys from a **one-time wallet signature** — not from your private key directly. The message is chain-neutral:
+`OpaqueClient.fromWallet` does the whole session setup in one call: it prompts the
+wallet once for a signature over the canonical `SETUP_MESSAGE`, derives the viewing and
+spending keys from it (your private key is never touched), and wires the wallet as the
+chain's transaction signer.
 
 ```ts
-import { OpaqueClient, SETUP_MESSAGE } from "@opaquecash/opaque";
+import { OpaqueClient } from "@opaquecash/opaque";
 
-// In the browser, prompt the user once:
-const walletSignature = await walletClient.signMessage({
-  account: userAddress,
-  message: SETUP_MESSAGE,
+const client = await OpaqueClient.fromWallet({
+  wallets: { chain: "ethereum", address: userAddress, provider: window.ethereum },
+  chainId: 11155111,                              // Sepolia
+  rpcUrl: "https://ethereum-sepolia-rpc.publicnode.com",
+  wasmModuleSpecifier: "/pkg/cryptography.js",    // required for scan/sweep/prove
 });
 ```
 
-`SETUP_MESSAGE` is exported from the SDK and must match [CSAP spec](https://github.com/opaquecash/spec/blob/main/CSAP.md) §2.2 byte-for-byte.
-
-## 3. Create the client
+Solana wallets use the same shape with wallet-adapter fields:
 
 ```ts
-const client = await OpaqueClient.create({
-  chainId: 11155111,                              // Sepolia
-  rpcUrl: "https://ethereum-sepolia.publicnode.com",
-  walletSignature,
-  ethereumAddress: userAddress,
-  wasmModuleSpecifier: "/pkg/cryptography.js",    // required for scan/sweep/prove
-  ethereumProvider: window.ethereum,              // for EVM writes (register, send, PSR)
-});
+wallets: { chain: "solana", publicKey, signMessage, signTransaction }
 ```
 
 <Note>
-  PSR schema/attestation admin (`createSchema`, `issueAttestation`) does **not** require WASM. Scanning, sweeping, and proof generation do.
+  The signature is HKDF entropy only and is never sent on-chain. Cache it (the
+  `walletSignature` from `requestSetupSignature`) and pass it back to `fromWallet` to
+  rebuild the client without prompting again. PSR schema/attestation admin does **not**
+  require WASM; scanning, sweeping, and proof generation do.
 </Note>
 
-## 4. Share your meta-address
+If you prefer to manage the signature yourself, sign `SETUP_MESSAGE` manually and use
+[`OpaqueClient.create`](/sdk/opaque-client#opaqueclientcreateconfig-manual).
+
+## 3. Share your meta-address
 
 ```ts
 const metaAddress = client.getMetaAddressHex();
@@ -61,7 +62,7 @@ const metaAddress = client.getMetaAddressHex();
 Register on-chain so others can resolve your normal address:
 
 ```ts
-// High-level — submits the tx for you
+// High-level: submits the tx for you
 const { txHash } = await client.registerMetaAddress("ethereum");
 
 // Or build calldata and submit via your own wallet UI
@@ -69,31 +70,39 @@ const reg = client.buildRegisterMetaAddressTransaction();
 await walletClient.sendTransaction({ to: reg.to, data: reg.data, chain: sepolia });
 ```
 
-## 5. Send a stealth payment
+## 4. Send a stealth payment
+
+`sendStealthPayment` resolves the recipient, derives a one-time stealth destination,
+transfers the native asset, and publishes the discovery announcement:
 
 ```ts
-const recipient = "0xRecipientEoaAddress...";
-const { metaAddressHex, registered } = await client.resolveRecipientMetaAddress(recipient);
+import { parseEther } from "viem";
 
-if (!registered) {
-  throw new Error("Recipient has not registered on Opaque yet");
-}
-
-// Low-level: prepare + announce calldata
-const send = client.prepareStealthSend(metaAddressHex!);
-const announce = client.buildAnnounceTransactionRequest(send);
-await walletClient.sendTransaction({ to: send.stealthAddress, value: parseEther("0.01"), chain: sepolia });
-await walletClient.sendTransaction({ to: announce.to, data: announce.data, chain: sepolia });
-
-// High-level: one call (transfer + announce)
 const result = await client.sendStealthPayment({
   chain: "ethereum",
-  recipient,
+  recipient: "0xRecipientEoaAddress...",
   amount: parseEther("0.01"),
 });
 ```
 
-## 6. Receive: scan and sweep
+The `recipient` can be an EVM address, a 66-byte meta-address, a Solana pubkey, an
+`ipfs://` DID document, or a `*.eth` name with a `com.opaque.meta` record. To resolve
+without sending (for example to show a confirmation screen):
+
+```ts
+const { metaAddressHex, source } = await client.resolveRecipient(recipientInput);
+```
+
+For full control (custom gas, batching, your own wallet UI), use the low-level pair:
+
+```ts
+const send = client.prepareStealthSend(metaAddressHex);
+const announce = client.buildAnnounceTransactionRequest(send);
+await walletClient.sendTransaction({ to: send.stealthAddress, value: parseEther("0.01"), chain: sepolia });
+await walletClient.sendTransaction({ to: announce.to, data: announce.data, chain: sepolia });
+```
+
+## 5. Receive: scan and sweep
 
 ```ts
 const inbox = await client.scan({ chains: ["ethereum"] });
@@ -108,11 +117,20 @@ if (inbox.length > 0) {
 }
 ```
 
+Building a React app? `@opaquecash/react` packages the read side as hooks; see
+[React hooks](/sdk/react).
+
+## Runnable examples
+
+The SDK repo ships a runnable example per flow in
+[`sdk/examples/`](https://github.com/opaquecash/sdk/tree/main/examples): `from-wallet`,
+`scan`, `send` (including a delayed announcement), `psr-prove`, and `uab-readonly`.
+
 ## Next steps
 
 <CardGroup cols={2}>
   <Card title="Issue an attestation" icon="certificate" href="/guides/issue-attestation">
-    Full issuer flow: schema → attest → announce.
+    Full issuer flow: schema, attest, announce.
   </Card>
   <Card title="Generate a reputation proof" icon="shield" href="/guides/generate-proof">
     Discover traits and submit a Groth16 proof on-chain.

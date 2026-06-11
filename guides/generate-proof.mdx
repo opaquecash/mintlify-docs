@@ -12,7 +12,7 @@ This guide covers trait discovery, Groth16 proof generation, simulation, and sub
 - `snarkjs` (pulled in by `@opaquecash/psr-prover`)
 - Circuit artifacts (default: hosted on opaque.cash `/circuits/...`)
 
-## Step 1 — Discover traits
+## Step 1: Discover traits
 
 ```ts
 const inbox = await client.scan({ chains: ["ethereum"] });
@@ -26,7 +26,7 @@ if (traits.length === 0) {
 const trait = traits[0];
 ```
 
-## Step 2 — Reconstruct stealth signing key
+## Step 2: Reconstruct the stealth signing key
 
 ```ts
 const stealthPrivKeyBytes = client.getStealthSignerPrivateKeyForReputationTrait(trait);
@@ -34,40 +34,37 @@ const stealthPrivKeyBytes = client.getStealthSignerPrivateKeyForReputationTrait(
 // client.getStealthSignerPrivateKey(output)
 ```
 
-## Step 3 — Build action scope
+## Step 3: Build the action scope
 
 ```ts
 import { buildActionScope, externalNullifierFromScope } from "@opaquecash/opaque";
 
-const scope = buildActionScope(11155111, "my-app", "premium-gate");
-const externalNullifier = externalNullifierFromScope(scope);
+const scope = buildActionScope({
+  chainId: 11155111,
+  module: "my-app",
+  actionId: "premium-gate",
+});
+const externalNullifier = externalNullifierFromScope(scope).toString();
 ```
 
-Or use static helpers on the client:
+Or use the equivalent static helpers on the client
+(`OpaqueClient.buildReputationActionScope` / `reputationExternalNullifierFromScope`).
+
+## Step 4: Generate the proof
 
 ```ts
-const scope = OpaqueClient.buildReputationActionScope(11155111, "my-app", "premium-gate");
-const externalNullifier = OpaqueClient.reputationExternalNullifierFromScope(scope);
-```
-
-## Step 4 — Generate proof
-
-```ts
-const attestationsJson = client.announcementsJsonForReputationWitness(rows);
-
 const proofData = await client.generateReputationProof({
   trait,
   stealthPrivKeyBytes,
   externalNullifier,
-  attestationsJson,
   onProgress: (stage, pct) => console.log(stage, pct),
   // artifacts: { wasmPath, zkeyPath }  // override default hosted paths
 });
 
-// proofData: { proof, nullifier, attestationId, ... }
+// proofData: { proof, publicSignals, nullifier, attestationId }
 ```
 
-## Step 5 — Fetch valid Merkle root
+## Step 5: Fetch a valid Merkle root
 
 ```ts
 const merkleRoot = await client.fetchLatestValidReputationRoot();
@@ -76,7 +73,7 @@ const valid = await client.isReputationRootValid(merkleRoot);
 const history = await client.fetchReputationRootHistory();
 ```
 
-## Step 6 — Simulate (optional)
+## Step 6: Simulate (optional)
 
 ```ts
 await client.simulateReputationVerification(walletClient, {
@@ -86,7 +83,7 @@ await client.simulateReputationVerification(walletClient, {
 });
 ```
 
-## Step 7 — Verify view (read-only)
+## Step 7: Verify view (read-only)
 
 ```ts
 const ok = await client.verifyReputationProofView({
@@ -96,7 +93,7 @@ const ok = await client.verifyReputationProofView({
 });
 ```
 
-## Step 8 — Submit on-chain
+## Step 8: Submit on-chain
 
 Consumes the nullifier on success:
 

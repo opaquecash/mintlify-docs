@@ -14,7 +14,7 @@ When a user signs `SETUP_MESSAGE`, the SDK derives:
 | **Viewing key** | Prefilter announcements (view tags) and scan owned outputs |
 | **Spending key** | Reconstruct one-time private keys to sweep funds |
 
-These keys are **chain-neutral** — the same wallet has one meta-address on Ethereum and Solana.
+These keys are **chain-neutral**: the same wallet has one meta-address on Ethereum and Solana.
 
 ## Meta-address
 
@@ -28,7 +28,7 @@ await client.registerMetaAddress("ethereum");
 ## Send flow
 
 1. Resolve recipient meta-address (registry lookup or direct hex)
-2. `prepareStealthSend(meta)` — derive ephemeral keypair + one-time stealth address
+2. `prepareStealthSend(meta)` derives an ephemeral keypair + one-time stealth address
 3. Transfer native asset to the stealth address
 4. `announce` on `StealthAddressAnnouncer` so the recipient can scan
 
@@ -37,7 +37,9 @@ const send = client.prepareStealthSend(metaAddressHex);
 // send.stealthAddress, send.ephemeralPublicKey, send.metadata
 ```
 
-Or use `sendStealthPayment` for a single high-level call.
+Or use `sendStealthPayment` for a single high-level call. To weaken timing analysis,
+delay the announcement or interleave decoy announcements; see
+[Anonymity utilities](/sdk/stealth-api#anonymity-utilities).
 
 ## Receive flow
 

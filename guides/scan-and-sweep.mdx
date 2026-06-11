@@ -98,9 +98,13 @@ const traits = await client.discoverTraits(indexerRows);
 // alias: getReputationTraitsFromAnnouncements
 
 for (const t of traits) {
-  console.log(t.attestationId, t.schemaId, t.fieldValues);
+  // DiscoveredTrait: { attestationId, stealthAddress, txHash, blockNumber, ephemeralPubkey, discoveredAt }
+  console.log(t.attestationId, t.stealthAddress, t.txHash);
 }
 ```
+
+The trait carries the on-chain attestation id and provenance; fetch the attestation
+body (schema, field values) from the chain's attestation registry when you need it.
 
 Witness JSON for proof generation:
 

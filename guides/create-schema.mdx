@@ -55,7 +55,7 @@ fieldDefinitions: [
 ]
 ```
 
-`schemaId` is derived deterministically from `(authority, name)` — use unique names per run in tests.
+`schemaId` is derived deterministically from `(authority, name)`, so use unique names per run in tests.
 
 ## List your schemas
 
@@ -80,7 +80,7 @@ await client.removeSchemaDelegate("ethereum", schemaId, delegateAddress);
 
 ## Deprecate a schema
 
-Irreversible — blocks new attestations:
+Irreversible; blocks new attestations:
 
 ```ts
 await client.deprecateSchema("ethereum", schemaId);

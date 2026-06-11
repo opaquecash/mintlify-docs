@@ -1,6 +1,6 @@
 ---
 title: Stealth API
-description: OpaqueClient methods for meta-addresses, stealth sends, scanning, and sweeping.
+description: OpaqueClient methods for meta-addresses, recipient resolution, stealth sends, scanning, sweeping, and anonymity utilities.
 ---
 
 ## Registry and identity
@@ -15,9 +15,64 @@ const meta = client.getMetaAddressHex();
 
 ---
 
+### `resolveRecipient(input)`
+
+Resolve ANY supported recipient identity to a validated 66-byte meta-address. This is
+the one entry point for "who am I paying": it accepts the same inputs you can pass to
+`sendStealthPayment({ recipient })`.
+
+```ts
+const r = await client.resolveRecipient("alice.opq.eth");
+// { metaAddressHex, source, input }
+```
+
+| Input | Resolution path | `source` |
+| --- | --- | --- |
+| 66-byte meta-address (optionally `st:opq:`-prefixed) | Validated and passed through | `"meta-address"` |
+| `0x...` 20-byte EVM address | ERC-6538 `StealthMetaAddressRegistry` | `"evm-registry"` |
+| Solana base58 pubkey | `stealth-registry` PDA (needs `solana` config) | `"solana-registry"` |
+| `ipfs://CID` or bare CID | DID document fetched via gateways (configure `ipfs`) | `"ipfs-did"` |
+| `*.eth` name | ENS `com.opaque.meta` text record (needs `ens` config) | `"ens-text"` |
+
+Every path validates that both 33-byte halves of the result are valid compressed
+secp256k1 points before returning. Unregistered, unset, or malformed identities throw
+with a path-specific message.
+
+**ENS setup.** The `*.eth` path reads the `com.opaque.meta` text record (CSAP 2.9).
+Pass an ENS-capable viem `PublicClient` (mainnet or Sepolia; your scan RPC usually is
+not one), or inject a custom reader:
+
+```ts
+import { createPublicClient, http } from "viem";
+import { mainnet } from "viem/chains";
+
+const client = await OpaqueClient.create({
+  // ...
+  ens: { client: createPublicClient({ chain: mainnet, transport: http(ensRpcUrl) }) },
+});
+
+// Or a custom reader (tests, alternative resolvers):
+ens: { getText: async (name, key) => myResolver.text(name, key) }
+```
+
+**IPFS setup.** The `ipfs://` path fetches a DID document from public gateways
+(`ipfs.io`, `cloudflare-ipfs.com` by default; tried in order) and extracts the
+meta-address from either a `service` entry of type `OpaqueStealthMetaAddress` or a
+top-level `com.opaque.meta` / `opaqueMetaAddress` field:
+
+```ts
+ipfs: {
+  gateways: ["https://my-gateway.example"],   // optional override
+  fetch: myFetch,                              // optional (e.g. a local node / Helia loader)
+}
+```
+
+---
+
 ### `resolveRecipientMetaAddress(recipientAddress)`
 
-Look up a recipient's registered meta-address on Ethereum.
+Lower-level Ethereum-only registry lookup. Unlike `resolveRecipient`, it does not throw
+for unregistered recipients, so it suits "is this person on Opaque yet?" UI checks.
 
 ```ts
 const res = await client.resolveRecipientMetaAddress("0xRecipient...");
@@ -64,7 +119,7 @@ const registered = await client.isMetaAddressRegistered("solana");
 
 ### `prepareStealthSend(recipientMetaAddressHex)`
 
-Derive one-time stealth material for sending. Pure crypto — no chain call.
+Derive one-time stealth material for sending. Pure crypto, no chain call.
 
 ```ts
 const send = client.prepareStealthSend(metaAddressHex);
@@ -79,23 +134,29 @@ const send = client.prepareStealthSend(metaAddressHex);
 
 ### `sendStealthPayment(params)`
 
-High-level native send + announce (optional relay).
+High-level native send + announce (optional relay, optional delayed announce).
 
 ```ts
 import { parseEther } from "viem";
 
 const result = await client.sendStealthPayment({
   chain: "ethereum",
-  recipient: "0x...",       // EOA, meta-address, or Solana pubkey
+  recipient: "0x...",        // anything resolveRecipient accepts: EOA, meta-address,
+                             // Solana pubkey, ipfs:// DID, or *.eth name
   amount: parseEther("0.01"),
-  announce: true,
-  relay: false,
-  token: undefined,         // throws if set — not yet supported
-  batchId: undefined,       // Solana Wormhole nonce when relay: true
+  announce: true,            // default
+  relay: false,              // set true for cross-chain UAB
+  delayAnnouncement: 60_000, // optional ms; see anonymity utilities below
+  token: undefined,          // throws if set; tokens not yet supported
+  batchId: undefined,        // Solana Wormhole nonce when relay: true
 });
 ```
 
-**Returns:** `SendStealthPaymentResult` — `{ chain, txHash, announceTxHash?, stealthAddress, destination?, ephemeralPublicKey, metaAddressHex }`
+**Returns:** `SendStealthPaymentResult`:
+`{ chain, txHash, announceTxHash?, announcePromise?, stealthAddress, destination?, ephemeralPublicKey, metaAddressHex }`
+
+Solana bundles transfer + announce in one transaction (unless `delayAnnouncement` is
+set, which forces two). Ethereum submits the transfer first, then the announce.
 
 ---
 
@@ -123,10 +184,69 @@ const req = client.buildAnnounceTransactionRequest(send);
 
 ### `buildAnnounceTransactionRequestForGhost(ephemeralPrivateKey)`
 
-Rebuild announce calldata from stored ephemeral private key only.
+Rebuild announce calldata from a stored ephemeral private key only.
 
 ```ts
 const req = client.buildAnnounceTransactionRequestForGhost(storedEphemeralPriv);
+```
+
+---
+
+## Anonymity utilities
+
+Two tools for growing the anonymity set around your payments (guide section 17).
+
+### `delayAnnouncement` (send option)
+
+Decouple send time from announce time: the value transfer is submitted immediately,
+the announcement only after the delay, breaking the timing correlation between the two
+on-chain events.
+
+```ts
+const result = await client.sendStealthPayment({
+  chain: "ethereum",
+  recipient,
+  amount: parseEther("0.01"),
+  delayAnnouncement: 5 * 60_000,  // announce 5 minutes after the transfer
+});
+
+console.log("transfer:", result.txHash);
+// result.announceTxHash is undefined; the pending announce is a promise:
+const announceTx = await result.announcePromise;
+```
+
+<Warning>
+  Await (or attach a handler to) `announcePromise`, and keep the process alive until it
+  resolves. If your process exits first, the announcement is never submitted and the
+  recipient cannot discover the payment by scanning.
+</Warning>
+
+---
+
+### `generateDummyAnnouncements(n)`
+
+Mint `n` decoy announcements. Each is a fully valid DKSAP announcement to a freshly
+generated THROWAWAY meta-address whose private keys are discarded: on-chain it is
+indistinguishable from a real payment announcement (valid curve points, correctly
+derived view tag), but nobody will ever match or spend it.
+
+```ts
+const dummies = client.generateDummyAnnouncements(5);
+// DummyAnnouncement[]: PrepareStealthSendResult + the throwaway metaAddressHex
+```
+
+---
+
+### `buildDummyAnnouncementTransactions(n)`
+
+Convenience over `generateDummyAnnouncements`: ready-to-submit `announce` calldata.
+Broadcast from any account, interleaved with real sends; announcements carry no value
+and anyone may announce.
+
+```ts
+for (const tx of client.buildDummyAnnouncementTransactions(3)) {
+  await walletClient.sendTransaction({ to: tx.to, data: tx.data });
+}
 ```
 
 ---
@@ -135,7 +255,7 @@ const req = client.buildAnnounceTransactionRequestForGhost(storedEphemeralPriv);
 
 ### `fetchAnnouncementRows(chain, opts?)`
 
-Fetch ALL native announcements on a chain as indexer-shaped rows — unfiltered, with full
+Fetch ALL native announcements on a chain as indexer-shaped rows, unfiltered, with full
 on-chain `metadata`. Raw input for the metadata-aware scanners (`filterOwnedAnnouncements`,
 `discoverTraits`); unlike `scan`, nothing is dropped.
 
@@ -156,7 +276,9 @@ each chain instead (UAB outputs still surface in `scan` / `fetchCrossChainAnnoun
 
 ### `filterOwnedAnnouncements(rows)`
 
-WASM scan: filter indexer rows to outputs owned by this wallet.
+WASM scan: filter indexer rows to outputs owned by this wallet. Malformed announcements
+(for example an ephemeral key that is not a valid curve point) are skipped, never fatal;
+anyone can announce.
 
 ```ts
 const owned = await client.filterOwnedAnnouncements(indexerRows);
@@ -177,7 +299,7 @@ const inbox = await client.scan({
   solanaLimit: 1000,
   includeCrossChain: true,
 });
-// UnifiedOwnedOutput[] — tagged with chain, chainId, source
+// UnifiedOwnedOutput[], tagged with chain, chainId, source
 ```
 
 ---
@@ -224,7 +346,7 @@ const { chain, tx } = await client.sweep({
 
 ### `getStealthSignerPrivateKey(output)`
 
-Reconstruct 32-byte secp256k1 private key for an owned output.
+Reconstruct the 32-byte secp256k1 private key for an owned output.
 
 ```ts
 const priv = client.getStealthSignerPrivateKey({ ephemeralPublicKey: output.ephemeralPublicKey });
@@ -234,7 +356,7 @@ const priv = client.getStealthSignerPrivateKey({ ephemeralPublicKey: output.ephe
 
 ### `getStealthSignerPrivateKeyFromEphemeralPrivateKey(ephemeralPrivateKey)`
 
-Same reconstruction from ghost-stored ephemeral secret.
+Same reconstruction from a ghost-stored ephemeral secret.
 
 ```ts
 const priv = client.getStealthSignerPrivateKeyFromEphemeralPrivateKey(ghost.ephemeralPrivateKey);
