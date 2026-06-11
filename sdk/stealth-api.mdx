@@ -40,9 +40,10 @@ Every path validates that both 33-byte halves of the result are valid compressed
 secp256k1 points before returning. Unregistered, unset, or malformed identities throw
 with a path-specific message.
 
-**ONS names (spec `ONS.md`).** Subnames of the Opaque Name Service parent resolve
-mirror-first: with `solana` configured, the SDK derives the mirror PDA from
-`keccak256(name)` and reads **one Solana account — no Ethereum RPC**. Without `solana`
+**ONS names ([ONS.md](https://github.com/opaquecash/spec/blob/main/ONS.md)).** Subnames
+of the Opaque Name Service parent resolve mirror-first: with `solana` configured, the
+SDK derives the mirror PDA from `keccak256(name)` and reads **one Solana account, no
+Ethereum RPC**. Without `solana`
 (or when the mirror has no record yet), it falls back to the canonical
 `OpaqueNameRegistry` wildcard resolver over your EVM RPC. The mirror lags the canonical
 record by Wormhole latency (eventually consistent, canonical-chain-wins). Defaults
