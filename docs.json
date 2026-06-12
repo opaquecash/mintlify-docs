@@ -97,7 +97,8 @@
               "sdk/reputation-api",
               "sdk/cross-chain-api",
               "sdk/react",
-              "sdk/utilities"
+              "sdk/utilities",
+              "sdk/relayer-client"
             ]
           },
           {

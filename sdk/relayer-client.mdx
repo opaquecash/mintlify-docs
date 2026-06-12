@@ -1,0 +1,86 @@
+---
+title: Relayer client
+description: Submit an on-chain action through the gas-private relayer market without linking your gas wallet.
+---
+
+`@opaquecash/relayer-client` submits a permissionless on-chain call (a PSR
+`verifyReputation`, a future pool withdrawal) through the relayer market so the
+submitting wallet is a staked relayer's, not yours. See
+[relayer-market.md](https://github.com/opaquecash/spec/blob/main/relayer-market.md)
+for the protocol and the [Gas-private submission guide](/guides/gas-private-submission)
+for the end-to-end flow.
+
+## How it works
+
+1. You commit to a hidden payload and fund an escrow with the fee (`createJob`).
+2. You advertise the job to a relayer node's HTTP gateway; nodes bid.
+3. You verify bids (signature, registered key, free stake) and pick a stake-weighted
+   winner.
+4. You seal the payload to the winner's x25519 key (NaCl `crypto_box`) and deliver it.
+5. The relayer accepts (bonding the fee) and submits. The escrow verifies the payload
+   against the commitment and pays atomically with execution, so a relayer cannot take
+   the fee without doing the work, and one that accepts then stalls is slashed.
+
+## `submitGasPrivate`
+
+The one-call flow over an injected funding step and registry readers:
+
+```ts
+import { submitGasPrivate, type RegistryReaders } from "@opaquecash/relayer-client";
+import { requireEvmDeployment } from "@opaquecash/deployments";
+
+const registry = requireEvmDeployment(11155111).contracts.relayerRegistry;
+
+const result = await submitGasPrivate({
+  // The action: a permissionless call the relayer makes from the escrow.
+  payload: { chain: 2, target: verifierAddress, calldata },
+  fee: parseEther("0.0005"),
+  deadline: Math.floor(Date.now() / 1000) + 1800,
+  registry,
+  gateway: { baseUrl: "http://localhost:8787" }, // any relayer node
+  readers,                                        // freeStakeOf + registeredKey
+  fundEscrow: async (job) => {
+    // Submit job.evmCreateJob with a funding wallet ideally unlinked from your identity.
+    const hash = await wallet.sendTransaction(job.evmCreateJob!);
+    await publicClient.waitForTransactionReceipt({ hash });
+  },
+});
+// result.winner.bid.operator accepted the job; watch RelayerRegistry.JobSubmitted.
+```
+
+`readers` supplies the on-chain truth used to verify bids:
+
+```ts
+const readers: RegistryReaders = {
+  freeStakeOf: (op) => publicClient.readContract({ /* freeStakeOf(op) */ }),
+  registeredKey: (op) => publicClient.readContract({ /* relayers(op).x25519PubKey */ }),
+};
+```
+
+Runnable example: `sdk/examples/gas-private-submit.ts`.
+
+## Building blocks
+
+For custom flows, the steps are exported individually:
+
+| Export | Purpose |
+| --- | --- |
+| `prepareJob(payload, opts)` | Commitment + advert + the `createJob` artifact (EVM tx request or Solana instruction) |
+| `buildEvmCreateJob` / `buildSolanaCreateJob` | Escrow funding tx builders |
+| `postAdvert` / `collectBids` / `postPayload` | HTTP gateway client |
+| `verifyEvmBidSignature` / `verifyBids` / `selectWinner` | Bid verification + stake-weighted selection |
+| `sealBox` / `openBox` | NaCl `crypto_box`, byte-compatible with the relayer node |
+| `payloadHash` / `payloadBytes` | Commitment + box plaintext for either chain |
+
+## Solana
+
+Pass a `SolanaJobPayload` (`{ chain: 1, instruction }`) and `opts.creator`; the inner
+instruction's accounts **must not be signers** (the escrow signs nothing on their
+behalf). `prepareJob` returns `solanaCreateJob` for you to send. Verify Solana bids
+with an ed25519 verifier passed as `verifySig`.
+
+<Note>
+The payload becomes public when the relayer submits it on-chain; the market hides the
+*submitter*, not the action. Fund the escrow from an address unlinked to your primary
+wallet (fee-in-proof, which removes this, is deferred to a later version).
+</Note>
