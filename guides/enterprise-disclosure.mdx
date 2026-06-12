@@ -1,0 +1,170 @@
+---
+title: Enterprise disclosure (threshold viewing keys)
+description: Selective M-of-N disclosure for KYC providers, DAO treasuries, and audit firms — without exposing the full viewing key.
+---
+
+Conditional disclosure lets an organization prove facts about **one** private
+transaction to an authorized party — only when an **M-of-N custodian quorum**
+approves, and only when the transaction **qualifies** under an on-chain policy
+(amount above a threshold) — without ever exposing the viewing key, which would
+reveal the *entire* payment history. Specified in
+[conditional-disclosure.md](https://github.com/opaquecash/spec/blob/main/conditional-disclosure.md).
+
+<Warning>
+**Testnet only, unaudited.** Same gates as the privacy pool: circuit + contract
+audits and a production trusted setup are mainnet prerequisites.
+</Warning>
+
+## Who is this for
+
+| Scenario | How it maps |
+|---|---|
+| **KYC / travel-rule provider** | Policy threshold = the reporting bound. The provider opens a case, the customer proves the qualifying pool transaction; the provider gets `(amount, deposit provenance)` on the record — nothing else. |
+| **DAO treasury oversight** | The board's custodians hold FROST shares. Treasury payments above the policy threshold are disclosable to the board case-by-case; below-threshold operational spend stays private. |
+| **Audit firm** | Each engagement is a `caseId`. Every disclosure consumes a one-time nullifier, so the audit trail is on-chain and replay-proof. |
+
+## The two surfaces — and which one to use
+
+**Active disclosure (default).** Custodians run FROST threshold signatures: the
+group's secret key is created by distributed key generation and **never exists in
+one place — not even during signing**. A disclosure is a zero-knowledge proof
+gated by the quorum's BIP-340 signature. Use this for everything routine.
+
+**Escrow backstop (exceptional).** Shamir shares of the viewing key, for
+key-loss recovery or lawful non-cooperative access. **Combining M shares
+reconstructs the full viewing key and reveals all incoming payments to the
+combiner.** It is a visible, deliberate escalation — rotate keys afterwards.
+
+```ts
+import { splitViewingKey, recoverViewingKey } from "@opaquecash/disclosure";
+
+const shares = await splitViewingKey(viewingKey, 2, 3); // 2-of-3
+// hand shares[i] to custodian i+1; recovery (exceptional!):
+const recovered = await recoverViewingKey([shares[0], shares[2]]);
+```
+
+## 1. Custodian ceremony (once)
+
+Each of the N custodians runs the `frost-custodian` CLI (in `sdk/tools/`),
+exchanging the round files through any shared channel. No dealer — the key is
+born distributed:
+
+```bash
+# every custodian i ∈ 1..3, in lockstep:
+frost-custodian dkg-part1    --id $i --min 2 --max 3 --dir ceremony/
+frost-custodian dkg-part2    --id $i --dir ceremony/
+frost-custodian dkg-finalize --id $i --dir ceremony/
+# → ceremony/keys/$i.key.secret.json stays private to custodian i
+# → ceremony/group.json contains the x-only group key for the policy
+```
+
+Register the policy on the chain(s) you operate on — it binds the group key to
+a pool and a qualification threshold, immutably (rotation = new ceremony + new
+policy):
+
+```ts
+import { buildRegisterPolicyTx, buildRegisterPolicyIx } from "@opaquecash/disclosure";
+
+// Ethereum (OpaqueDisclosureRegistry)
+const tx = buildRegisterPolicyTx(registryAddress, {
+  pool: poolAddress,
+  groupKeyX: BigInt("0x" + group.group_key_x),
+  threshold: 1_000_000_000_000_000_000n, // 1 ETH reporting bound
+  m: 2, n: 3,
+});
+
+// Solana (conditional-disclosure program)
+const ix = buildRegisterPolicyIx(programId, {
+  pool: poolPda, groupKeyX, threshold: 1_000_000_000n, m: 2, n: 3, payer,
+});
+```
+
+## 2. A disclosure, end to end
+
+**The requester opens a case.** A case is `(policyId, caseId, requester)`;
+`caseId` is an opaque 32-byte engagement identifier. The `context` commits to
+all three and is what custodians sign — it contains **no transaction data**, so
+custodians can authorize without learning anything; the circuit enforces that
+only a qualifying note can satisfy the proof.
+
+```ts
+import { computeContextEvm, contextToMessage } from "@opaquecash/disclosure";
+
+const context = computeContextEvm(policyId, caseId, requesterAddress);
+const message = contextToMessage(context); // the 32 bytes custodians sign
+```
+
+**M custodians co-sign** (any M of the N):
+
+```bash
+frost-custodian sign-round1 --id $i --key ceremony/keys/$i.key.secret.json --dir signing/
+frost-custodian sign-round2 --id $i --key ceremony/keys/$i.key.secret.json \
+    --message <context-hex> --dir signing/
+frost-custodian aggregate   --group ceremony/group.json --message <context-hex> --dir signing/
+# → signing/signature.json: a standard BIP-340 signature, ready for the registry
+```
+
+**The note owner proves.** The proof shows the note is in the pool's state tree
+and `value > threshold`, and discloses `(value, label)` — the label links to the
+`Deposit` event, giving provenance:
+
+```ts
+import {
+  buildDisclosureWitness, generateDisclosureProof,
+  parseFrostSignature, verifyQuorumSignature, toSolidityProof, buildDiscloseTx,
+} from "@opaquecash/disclosure";
+import { buildPoolCrypto } from "@opaquecash/privacy-pool";
+
+const crypto = await buildPoolCrypto();
+const witness = buildDisclosureWitness(crypto, {
+  note,                       // { value, label, nullifier, secret }
+  threshold: policy.threshold,
+  stateLeaves, stateIndex,    // from the pool's Deposit events
+  context,
+});
+const { proof } = await generateDisclosureProof(witness, {
+  wasmPath: "conditional_disclosure.wasm",
+  zkeyPath: "conditional_disclosure_final.zkey",
+});
+```
+
+**The requester submits** (the registry binds the request to `msg.sender`, so a
+proof + signature cannot be hijacked):
+
+```ts
+const sig = parseFrostSignature(signatureJson);
+verifyQuorumSignature(groupKeyX, message, sig); // pre-flight: mirrors the on-chain check
+
+const tx = buildDiscloseTx(registryAddress, {
+  proof: toSolidityProof(proof),
+  signals: [w.value, w.label, w.threshold, w.stateRoot, w.disclosureNullifier, w.context],
+  policyId, caseId, sig,
+});
+```
+
+The registry verifies the policy threshold, the context, the BIP-340 quorum
+signature, the pool root, and the Groth16 proof, then consumes the disclosure
+nullifier and emits `Disclosure(policyId, caseId, requester, label, value, …)`
+— the on-record result.
+
+## What each party learns
+
+| Party | Learns | Never learns |
+|---|---|---|
+| Custodians | that case `(policyId, caseId, requester)` was authorized | any note data, the viewing key |
+| Requester | `(value, label → deposit provenance)`, qualification, case binding | other notes, withdrawal destinations, the viewing key |
+| Chain | the `Disclosure` event + a one-time nullifier | which other notes the owner holds |
+
+A second disclosure of the same note under a **different** case needs a fresh
+quorum signature (different context → different nullifier). Replaying the
+**same** disclosure is rejected by the nullifier registry.
+
+## Failure modes to plan for
+
+- **Below-threshold note**: the witness builder throws and the circuit is
+  unsatisfiable — a quorum cannot be tricked into over-disclosing, and an owner
+  cannot disclose what does not qualify.
+- **Quorum loss**: fewer than M live custodians means no disclosures (and no
+  recovery if escrow shares are also lost). Choose N comfortably above M.
+- **Owner non-cooperation**: the proof path needs the note openings. The
+  escrow backstop is the documented escalation, with its total-read-access cost.

@@ -86,7 +86,8 @@
               "guides/scan-and-sweep",
               "guides/generate-proof",
               "guides/ons-naming",
-              "guides/privacy-pool"
+              "guides/privacy-pool",
+              "guides/enterprise-disclosure"
             ]
           },
           {
