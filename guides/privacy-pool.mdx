@@ -101,3 +101,129 @@ compose, so neither the payer↔payee link nor the deposit↔withdrawal link is 
 There is **no hosted one-click pool UI**. Pool access is via this SDK and self-hosted
 integrators only. See the [relayer market](/sdk/relayer-client) to also hide the gas
 wallet that submits the withdrawal.
+
+## Full end-to-end walkthrough (Ethereum Sepolia)
+
+A complete, copy-pasteable deposit → withdraw flow against the live Sepolia pool
+(`0x49a5bB6d079a43d50596069b4F2632005CFe729E`). The same shape works on Solana devnet via
+the program at `5NjweHM4z7NrG4NLVUyJ8rtX8jLM3xtBWAR1wSJZ7vjY` (build the instructions with
+`@solana/web3.js` instead of viem; the crypto is identical). Working references:
+`ethereum/infra/scripts/e2e-privacy-pool.ts` and `solana/scripts/e2e-privacy-pool.mjs`.
+
+### 0. Setup
+
+```ts
+import { createPublicClient, createWalletClient, http, parseEther, formatEther } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { sepolia } from "viem/chains";
+import { requireEvmDeployment } from "@opaquecash/deployments";
+import {
+  buildPoolCrypto, PoolMerkleTree,
+  generateDepositNote, buildDepositTx,
+  buildWithdrawalWitness, generateWithdrawalProof, buildWithdrawTx,
+  opaquePrivacyPoolAbi,
+} from "@opaquecash/privacy-pool";
+import { randomBytes } from "@noble/hashes/utils";
+
+const pool = requireEvmDeployment(11155111).contracts.opaquePrivacyPool;
+const account = privateKeyToAccount(process.env.FUNDER_KEY as `0x${string}`);
+const wallet = createWalletClient({ account, chain: sepolia, transport: http(rpcUrl) }).extend((c) => c);
+const publicClient = createPublicClient({ chain: sepolia, transport: http(rpcUrl) });
+const crypto = await buildPoolCrypto();
+```
+
+### 1. Deposit
+
+The depositor picks secrets, deposits the value, and **persists the note** — it is the
+only way to withdraw and cannot be recovered from the chain.
+
+```ts
+const value = parseEther("0.01");
+const note = generateDepositNote(crypto, randomBytes); // { nullifier, secret, precommitment }
+
+const depositTx = buildDepositTx(pool, note, value);
+const depositHash = await wallet.sendTransaction(depositTx);
+const receipt = await publicClient.waitForTransactionReceipt({ hash: depositHash });
+
+// Read the contract-assigned label + leaf index from the Deposit event.
+const log = receipt.logs.find((l) => l.address.toLowerCase() === pool.toLowerCase());
+const decoded = publicClient.decodeEventLog
+  ? undefined
+  : undefined; // or: parse the Deposit(commitment, label, value, leafIndex) event
+// Persist this note record off-chain (encrypted):
+const record = { value, label /* from event */, nullifier: note.nullifier, secret: note.secret, leafIndex /* from event */ };
+```
+
+### 2. Wait for ASP approval
+
+An Association Set Provider reviews the deposit and, if it is "clean", adds your `label`
+to the association tree and posts the new `aspRoot` on-chain. You can only withdraw once
+your label is in the ASP root the contract currently holds. On testnet a single authority
+controls the ASP root.
+
+### 3. Reconstruct the trees
+
+Build the state tree from every `Deposit` commitment (in `leafIndex` order) and the
+association tree from the ASP's approved labels:
+
+```ts
+// commitments[]: all Deposit event commitments, ordered by leafIndex (from an indexer/logs)
+const stateTree = new PoolMerkleTree(crypto, commitments);
+const stateProof = stateTree.proof(record.leafIndex);
+
+// labels[]: the ASP's approved labels, ordered as the ASP publishes them
+const aspTree = new PoolMerkleTree(crypto, labels);
+const aspProof = aspTree.proof(labels.indexOf(record.label));
+```
+
+### 4. Build the proof and withdraw
+
+The recipient is a **fresh stealth address**. The contract binds the payout into the
+proof via `context`, so read it from the contract and feed it to the witness:
+
+```ts
+const params = { recipient: freshStealthAddress, feeRecipient, fee: 0n };
+const context = await publicClient.readContract({
+  address: pool, abi: opaquePrivacyPoolAbi, functionName: "context", args: [params],
+});
+
+const withdrawnValue = parseEther("0.004");
+const newNote = generateDepositNote(crypto, randomBytes); // remainder openings
+
+const witness = buildWithdrawalWitness(crypto, {
+  note: { value: record.value, label: record.label, nullifier: record.nullifier, secret: record.secret },
+  withdrawnValue,
+  newNullifier: newNote.nullifier,
+  newSecret: newNote.secret,
+  stateLeaves: commitments, stateIndex: record.leafIndex,
+  aspLeaves: labels, aspIndex: labels.indexOf(record.label),
+  context: BigInt(context),
+});
+
+const { proof } = await generateWithdrawalProof(witness, {
+  wasmPath: "withdrawal.wasm",     // from circuits/v2/build (served statically in a browser)
+  zkeyPath: "withdrawal_final.zkey",
+});
+
+const withdrawTx = buildWithdrawTx(pool, proof, witness.publics, params);
+const wHash = await wallet.sendTransaction(withdrawTx);
+await publicClient.waitForTransactionReceipt({ hash: wHash });
+// freshStealthAddress now holds withdrawnValue - fee, unlinked from the deposit.
+```
+
+### 5. Spend the remainder later
+
+The remainder (`record.value - withdrawnValue`) was re-inserted as a new commitment under
+the **same label** with `newNote`'s openings. Persist
+`{ value: remainder, label: record.label, nullifier: newNote.nullifier, secret: newNote.secret, leafIndex: <new> }`
+and repeat from step 3 to withdraw it (no new ASP approval needed — the label is unchanged).
+
+### What an observer sees
+
+- **Deposit:** an address deposited `value` and a commitment + label were emitted.
+- **Withdrawal:** a (different) address submitted a proof; a fresh address received
+  `withdrawnValue`; a nullifier and a new commitment were recorded.
+
+There is **no on-chain link** between the deposit and the withdrawal, and the withdrawal
+amount need not equal the deposit. Pairing this with a [relayer-market](/sdk/relayer-client)
+submission also hides the gas wallet that lands the withdrawal transaction.
