@@ -1,0 +1,73 @@
+---
+title: Server-side scanning
+description: Run scanning on a server with a view-only client that can detect payments but never spend.
+---
+
+Scanning is the heartbeat of an inbox, and doing it server-side enables push notifications and
+instant loads. The safe way to do this is a **view-only client**: it holds the viewing private
+key and the spending public key, so it can detect every incoming payment but can never move funds.
+
+## The key split
+
+CSAP derives two keys from the wallet signature: the **viewing key** `v` (scanning) and the
+**spending key** `s` (spending). A scanner needs only `v` and the spending public key `S`
+(CSAP §2.8 watch-only delegation). Give your server `v` and `S` — **never** the spending key.
+
+<Warning>
+  A server that holds the viewing key can link every incoming payment to the user. That is an
+  inherent privacy tradeoff of server-side scanning, separate from any end-to-end encryption of
+  labels or contacts. A breached scanning server can read the inbox; it can never spend.
+</Warning>
+
+## View-only client
+
+```ts
+import { OpaqueClient } from "@opaquecash/opaque";
+
+// On the server: only the viewing private key + spending public key are provisioned.
+const viewer = await OpaqueClient.createViewOnly(
+  {
+    chainId: 11155111,
+    rpcUrl,
+    ethereumAddress: userAddress,
+    wasmModuleSpecifier: "/pkg/cryptography.js",
+    solana: { cluster: "devnet" },
+  },
+  { viewingKey, spendPublicKey },   // 0x hex or bytes
+);
+
+viewer.isViewOnly; // true
+
+const inbox = await viewer.scan({ chains: ["ethereum", "solana"], includeCrossChain: true });
+const tokenBalances = await viewer.getTokenBalancesForOutputs(inbox, { ethereum: ["0xUSDC..."] });
+```
+
+Spending is hard-disabled — `sweep`, `getStealthSignerPrivateKey`, and reputation key
+reconstruction throw, because the server has no spending key:
+
+```ts
+await viewer.sweep({ output: inbox[0], chain: "ethereum", destination });
+// throws: "view-only client has no spending key ..."
+```
+
+The user's app constructs a full client with `OpaqueClient.create` / `fromWallet` (holding the
+spending key) to sweep or spend.
+
+## Where the keys come from
+
+Derive both keys client-side from the wallet signature, then send **only** the viewing key and
+spending public key to your server over an authenticated channel:
+
+```ts
+import { deriveKeysFromSignature, keysToStealthMetaAddress } from "@opaquecash/opaque";
+
+const { viewingKey, spendingKey } = deriveKeysFromSignature(walletSignature);
+const { S: spendPublicKey } = keysToStealthMetaAddress(viewingKey, spendingKey);
+// Upload { viewingKey, spendPublicKey } only. Keep spendingKey on the device.
+```
+
+## Native scanner service
+
+Server-side you can also run the native Rust scanner (`opaque-scanner` on crates.io) instead of
+the WASM build — same algorithm, no WASM runtime needed. Either way, scanning needs only the
+viewing key, so the view-only model holds regardless of which implementation you run.

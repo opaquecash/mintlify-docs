@@ -116,11 +116,45 @@ const relay = await client.buildAnnounceWithRelay("solana", send);
 // relay.instructions, relay.signers: co-sign with solanaWallet
 ```
 
-## Limitations
+## Sending tokens (ERC-20 / SPL)
 
-<Warning>
-  Token (SPL / ERC-20) stealth sends are **not yet supported**. Pass native amounts only; `token` param throws if set.
-</Warning>
+Set `token` to send an ERC-20 (Ethereum) or SPL mint (Solana) instead of the native asset.
+`amount` is the token's smallest unit (decimals-aware). The announcement is identical to a
+native send, so the recipient discovers it the same way.
+
+```ts
+// USDC on Ethereum (6 decimals)
+await client.sendStealthPayment({
+  chain: "ethereum",
+  recipient,
+  token: "0xUSDC...",
+  amount: 25_000000n,   // 25 USDC
+});
+
+// SPL mint on Solana (sender pays the ~0.002 SOL ATA rent for the recipient)
+await client.sendStealthPayment({
+  chain: "solana",
+  recipient,
+  token: "EPjF...USDCmint",
+  amount: 25_000000n,
+});
+```
+
+<Note>
+  A fresh stealth address holds the token but no native gas, so the recipient cannot move it
+  without help. Either set `gasDrop` to also send a little native asset to the stealth address,
+  or have the recipient withdraw via a [gasless sweep](/guides/scan-and-sweep#gasless-token-sweep).
+</Note>
+
+```ts
+await client.sendStealthPayment({
+  chain: "ethereum",
+  recipient,
+  token: "0xUSDC...",
+  amount: 25_000000n,
+  gasDrop: parseEther("0.0005"),  // recipient can self-sweep later
+});
+```
 
 ## Recipient resolution
 

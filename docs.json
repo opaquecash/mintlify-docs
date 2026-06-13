@@ -84,6 +84,7 @@
               "guides/create-schema",
               "guides/issue-attestation",
               "guides/scan-and-sweep",
+              "guides/server-side-scanning",
               "guides/generate-proof",
               "guides/ons-naming",
               "guides/privacy-pool",

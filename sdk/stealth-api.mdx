@@ -197,7 +197,8 @@ const result = await client.sendStealthPayment({
   announce: true,            // default
   relay: false,              // set true for cross-chain UAB
   delayAnnouncement: 60_000, // optional ms; see anonymity utilities below
-  token: undefined,          // throws if set; tokens not yet supported
+  token: undefined,          // ERC-20 address / SPL mint; omit for the native asset
+  gasDrop: undefined,        // optional native top-up to the stealth address with a token send
   batchId: undefined,        // Solana Wormhole nonce when relay: true
 });
 ```
@@ -382,15 +383,20 @@ const balances = await client.getBalancesForOutputs(inbox);
 
 ### `sweep(params)`
 
-Sweep full native balance from a stealth output.
+Sweep the full native balance from a stealth output, or the full balance of `token`
+(ERC-20 address / SPL mint) when set. `closeAccount` (Solana) reclaims the token-account rent.
 
 ```ts
 const { chain, tx } = await client.sweep({
   output: inbox[0],
   chain: "ethereum",
   destination: "0xFresh...",
+  token: "0xUSDC...",   // omit for native; ERC-20 sweep needs native gas at the stealth address
 });
 ```
+
+For a stealth address holding a token but no gas, use `buildGaslessTokenSweep` and a relayer
+(see [Gasless token sweep](/guides/scan-and-sweep#gasless-token-sweep)).
 
 ---
 

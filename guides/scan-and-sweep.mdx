@@ -1,6 +1,6 @@
 ---
 title: Scan and sweep
-description: Discover owned stealth outputs across chains and move native balances.
+description: Discover owned stealth outputs across chains and move native or token balances.
 ---
 
 Scanning requires the cryptography WASM module. This guide covers unified inbox scanning, balance reads, and sweeping.
@@ -66,6 +66,17 @@ const totals = await client.getBalancesFromAnnouncements(indexerRows);
 // { tokenAddress, symbol, decimals, totalRaw }[]
 ```
 
+Per-output token balances across chains (for a token inbox). Ethereum defaults to the
+configured tracked ERC-20s; Solana SPL mints (base58) must be passed:
+
+```ts
+const tokenBalances = await client.getTokenBalancesForOutputs(inbox, {
+  ethereum: ["0xUSDC..."],
+  solana: ["EPjF...USDCmint"],
+});
+// { chain, stealthAddress, address, token, raw }[]  (zero balances omitted)
+```
+
 ## Sweep
 
 ```ts
@@ -74,6 +85,65 @@ const { tx } = await client.sweep({
   chain: inbox[0].chain,
   destination: "0xFreshAddress..." /* or Solana base58 */,
 });
+```
+
+### Sweep tokens
+
+Pass `token` to sweep the full ERC-20 / SPL balance instead of the native asset. On
+Ethereum the stealth address must hold native gas (see `gasDrop` on the send, or use the
+gasless sweep below); on Solana set `closeAccount` to reclaim the token-account rent.
+
+```ts
+await client.sweep({
+  output: inbox[0],
+  chain: "ethereum",
+  destination: "0xFreshAddress...",
+  token: "0xUSDC...",
+});
+
+await client.sweep({
+  output: solanaOutput,
+  chain: "solana",
+  destination: "FreshOwner...base58",
+  token: "EPjF...USDCmint",
+  closeAccount: true,
+});
+```
+
+### Gasless token sweep
+
+When the stealth address holds a token but no native gas, build a relayer-submittable
+sweep. The stealth key authorizes it offline; a relayer pays the gas and takes `fee` in the
+token (spec/relayer-market.md §9).
+
+```ts
+const sweep = await client.buildGaslessTokenSweep({
+  output: inbox[0],
+  chain: "ethereum",
+  token: "0xUSDC...",
+  destination: "0xFreshAddress...",
+  fee: 50_000n,                       // paid to the relayer in-token
+  deadline: BigInt(Math.floor(Date.now() / 1000) + 3600),
+  // forwarder defaults to the deployed StealthTokenSweep; value/tokenName auto-read
+});
+
+// Hand sweep.to + sweep.data to any relayer; it sends the tx and earns the fee.
+```
+
+On Solana, pass the relayer's `feePayer`; the returned transaction is partially signed by
+the stealth key, and the relayer co-signs as fee payer:
+
+```ts
+const sweep = await client.buildGaslessTokenSweep({
+  output: solanaOutput,
+  chain: "solana",
+  token: "EPjF...USDCmint",
+  destination: "FreshOwner...base58",
+  fee: 50_000n,
+  deadline: 0n,                       // unused on Solana
+  feePayer: "RelayerPubkey...base58",
+});
+// Relayer: submitSolanaGaslessSweep(connection, sweep.transactionBase64, relayerKeypair)
 ```
 
 ## Manual key reconstruction

@@ -60,6 +60,21 @@ const client = await OpaqueClient.create(config);
 
 `create` is async: it optionally loads WASM and derives viewing/spending keys from `walletSignature`.
 
+### `OpaqueClient.createViewOnly(config, keys)`
+
+Build a scan-only client from the viewing private key and spending public key (no
+`walletSignature`). It scans and reads balances but cannot spend — `sweep` and key
+reconstruction throw. This is the safe shape for a server-side scanner. See
+[Server-side scanning](/guides/server-side-scanning).
+
+```ts
+const viewer = await OpaqueClient.createViewOnly(
+  { chainId, rpcUrl, ethereumAddress, wasmModuleSpecifier },
+  { viewingKey, spendPublicKey },
+);
+viewer.isViewOnly; // true
+```
+
 ### OpaqueClientConfig
 
 | Field | Type | Required | Description |
