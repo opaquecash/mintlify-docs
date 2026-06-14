@@ -22,17 +22,38 @@ legal opinion (see the ethereum repo's `DISCLAIMER.md` and
 ## How it works
 
 ```
-deposit:  pick nullifier, secret  →  precommitment = Poseidon(nullifier, secret)
-          deposit(precommitment){value}  →  contract assigns label = Poseidon(scope, index),
+deposit:  pick nullifier, secret  ->  precommitment = Poseidon(nullifier, secret)
+          deposit(precommitment){value}  ->  contract assigns label = Poseidon(scope, index),
           inserts commitment = Poseidon(value, label, precommitment) into the state tree
 ASP:      provider reviews the deposit; if clean, adds `label` to the association set
-withdraw: prove (commitment ∈ state tree) ∧ (label ∈ association set) ∧ nullifier ∧
-          value-accounting, to a FRESH stealth address  →  paid out, remainder re-inserted
+withdraw: prove (commitment in state tree) and (label in association set) and nullifier and
+          value-accounting, to a FRESH stealth address  ->  paid out, remainder re-inserted
 ```
 
 The commitment scheme, trees, and proof are specified in
 [privacy-pool.md](https://github.com/opaquecash/spec/blob/main/privacy-pool.md). The SDK's
 Poseidon commitments and Merkle trees are byte-identical to the circuit and contract.
+
+## Getting the association set
+
+To withdraw you need the ordered approved labels (`aspLeaves`) and your label's position in
+them (`aspIndex`). Both are **self-authenticating**: you verify them by recomputing the
+Merkle root and checking it equals the on-chain `aspRoot`, so the source is never trusted.
+`@opaquecash/privacy-pool` (>= 0.3.0) gives you two decentralized ways to obtain them:
+
+1. **Chain-native, `reconstructAspSetFromDeposits`.** Under the default approve-all policy
+   the set is just the deposit labels ordered by `leafIndex`, so the client rebuilds it
+   straight from on-chain `Deposit` events. You already scan those events for the state tree,
+   so this costs nothing extra and depends only on the chain.
+2. **Published manifest, `resolveAspSetViaEns`.** For a selective policy (where the approved
+   set is not derivable from chain), fetch the ASP's published opening through its ENS text
+   record (`com.opaque.aspset`, an `ipfs://` pointer), then verify it with
+   `aspSetFromManifest`.
+
+The contract accepts a proof only against the **single current** `aspRoot` (the state root,
+by contrast, has a short history window). So resolve the set against the latest `aspRoot`,
+build the proof, and submit promptly. If the ASP posts a new root in between, rebuild against
+the new one.
 
 ## Deposit
 
@@ -46,21 +67,27 @@ const note = generateDepositNote(crypto, randomBytes); // { nullifier, secret, p
 const tx = buildDepositTx(poolAddress, note, parseEther("1"));
 await wallet.sendTransaction(tx); // value = 1 ETH
 
-// PERSIST `note` (nullifier + secret) and the assigned `label` (from the Deposit event)
-// — they are required to withdraw and are never recoverable from the chain alone.
+// PERSIST `note` (nullifier + secret) and the assigned `label` (from the Deposit event).
+// They are required to withdraw and are never recoverable from the chain alone.
 ```
 
 ## Withdraw
 
-Reconstruct the state tree from the pool's `Deposit` commitments and the association tree
-from the ASP's approved labels, then prove and submit:
+Reconstruct the state tree from the pool's `Deposit` commitments, resolve the association set
+for the current `aspRoot`, then prove and submit:
 
 ```ts
 import {
   buildWithdrawalWitness,
   generateWithdrawalProof,
   buildWithdrawTx,
+  reconstructAspSetFromDeposits,
+  aspIndexOf,
 } from "@opaquecash/privacy-pool";
+
+// `deposits`: { label, leafIndex } for every Deposit event (the same scan builds the state tree).
+const set = reconstructAspSetFromDeposits(crypto, deposits, currentAspRoot);
+if (!set) throw new Error("no set matches the current aspRoot yet; wait for the next ASP update");
 
 // The contract binds the payout into the proof via `context`; read it first.
 const params = { recipient: freshStealthAddress, feeRecipient, fee };
@@ -71,9 +98,10 @@ const context = await publicClient.readContract({
 const witness = buildWithdrawalWitness(crypto, {
   note: { value, label, nullifier, secret },
   withdrawnValue: parseEther("0.4"),
-  newNullifier, newSecret,            // fresh openings for the remainder
-  stateLeaves, stateIndex,            // from the pool's Deposit events
-  aspLeaves, aspIndex,                // from the ASP's approved labels
+  newNullifier, newSecret,                          // fresh openings for the remainder
+  stateLeaves, stateIndex,                          // from the pool's Deposit events
+  aspLeaves: set.aspLeaves,                         // resolved + verified against aspRoot
+  aspIndex: aspIndexOf(set.aspLeaves, label),
   context,
 });
 
@@ -87,14 +115,14 @@ await wallet.sendTransaction(tx); // the recipient receives withdrawnValue - fee
 ```
 
 The remainder (`value - withdrawnValue`) is re-inserted as a fresh commitment under the
-**same label**, so it stays in the association set; persist `(remainder, label,
+**same label**, so it stays in the association set. Persist `(remainder, label,
 newNullifier, newSecret)` to spend it later.
 
 ## Compose with recipient privacy
 
 Withdraw to a fresh stealth address resolved from a recipient's meta-address (CSAP /
 [ONS](/guides/ons-naming)): amount privacy (pool) and recipient privacy (stealth address)
-compose, so neither the payer↔payee link nor the deposit↔withdrawal link is on-chain.
+compose, so neither the payer-to-payee link nor the deposit-to-withdrawal link is on-chain.
 
 ## Policy
 
@@ -104,7 +132,7 @@ wallet that submits the withdrawal.
 
 ## Full end-to-end walkthrough (Ethereum Sepolia)
 
-A complete, copy-pasteable deposit → withdraw flow against the live Sepolia pool
+A complete, copy-pasteable deposit and withdraw flow against the live Sepolia pool
 (`0x49a5bB6d079a43d50596069b4F2632005CFe729E`). The same shape works on Solana devnet via
 the program at `5NjweHM4z7NrG4NLVUyJ8rtX8jLM3xtBWAR1wSJZ7vjY` (build the instructions with
 `@solana/web3.js` instead of viem; the crypto is identical). Working references:
@@ -113,7 +141,7 @@ the program at `5NjweHM4z7NrG4NLVUyJ8rtX8jLM3xtBWAR1wSJZ7vjY` (build the instruc
 ### 0. Setup
 
 ```ts
-import { createPublicClient, createWalletClient, http, parseEther, formatEther } from "viem";
+import { createPublicClient, createWalletClient, http, parseEther, decodeEventLog, parseAbiItem } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { sepolia } from "viem/chains";
 import { requireEvmDeployment } from "@opaquecash/deployments";
@@ -121,21 +149,27 @@ import {
   buildPoolCrypto, PoolMerkleTree,
   generateDepositNote, buildDepositTx,
   buildWithdrawalWitness, generateWithdrawalProof, buildWithdrawTx,
+  reconstructAspSetFromDeposits, aspIndexOf,
   opaquePrivacyPoolAbi,
 } from "@opaquecash/privacy-pool";
 import { randomBytes } from "@noble/hashes/utils";
 
 const pool = requireEvmDeployment(11155111).contracts.opaquePrivacyPool;
 const account = privateKeyToAccount(process.env.FUNDER_KEY as `0x${string}`);
-const wallet = createWalletClient({ account, chain: sepolia, transport: http(rpcUrl) }).extend((c) => c);
+const wallet = createWalletClient({ account, chain: sepolia, transport: http(rpcUrl) });
 const publicClient = createPublicClient({ chain: sepolia, transport: http(rpcUrl) });
 const crypto = await buildPoolCrypto();
+
+// The Deposit event carries the contract-assigned label + leaf index.
+const depositEvent = parseAbiItem(
+  "event Deposit(bytes32 indexed commitment, uint256 label, uint256 value, uint32 leafIndex)",
+);
 ```
 
 ### 1. Deposit
 
-The depositor picks secrets, deposits the value, and **persists the note** — it is the
-only way to withdraw and cannot be recovered from the chain.
+The depositor picks secrets, deposits the value, and **persists the note**. It is the only
+way to withdraw and cannot be recovered from the chain.
 
 ```ts
 const value = parseEther("0.01");
@@ -145,41 +179,72 @@ const depositTx = buildDepositTx(pool, note, value);
 const depositHash = await wallet.sendTransaction(depositTx);
 const receipt = await publicClient.waitForTransactionReceipt({ hash: depositHash });
 
-// Read the contract-assigned label + leaf index from the Deposit event.
-const log = receipt.logs.find((l) => l.address.toLowerCase() === pool.toLowerCase());
-const decoded = publicClient.decodeEventLog
-  ? undefined
-  : undefined; // or: parse the Deposit(commitment, label, value, leafIndex) event
+// Decode the contract-assigned label + leaf index from the Deposit event.
+const depositLog = receipt.logs.find((l) => l.address.toLowerCase() === pool.toLowerCase());
+const { args } = decodeEventLog({ abi: [depositEvent], data: depositLog!.data, topics: depositLog!.topics });
+
 // Persist this note record off-chain (encrypted):
-const record = { value, label /* from event */, nullifier: note.nullifier, secret: note.secret, leafIndex /* from event */ };
+const record = {
+  value,
+  label: args.label,
+  leafIndex: Number(args.leafIndex),
+  nullifier: note.nullifier,
+  secret: note.secret,
+};
 ```
 
 ### 2. Wait for ASP approval
 
-An Association Set Provider reviews the deposit and, if it is "clean", adds your `label`
-to the association tree and posts the new `aspRoot` on-chain. You can only withdraw once
-your label is in the ASP root the contract currently holds. On testnet a single authority
-controls the ASP root.
+An Association Set Provider reviews the deposit and, if it is clean, adds your `label` to the
+association set and posts the new `aspRoot` on-chain. You can withdraw only once your label is
+in the `aspRoot` the contract currently holds. On testnet a single authority controls the ASP
+root. Read the current root you must prove against:
+
+```ts
+const currentAspRoot = BigInt(
+  await publicClient.readContract({ address: pool, abi: opaquePrivacyPoolAbi, functionName: "aspRoot" }),
+);
+```
 
 ### 3. Reconstruct the trees
 
-Build the state tree from every `Deposit` commitment (in `leafIndex` order) and the
-association tree from the ASP's approved labels:
+Build the state tree from every `Deposit` commitment (in `leafIndex` order), and resolve the
+association set for the current `aspRoot`. Both are self-authenticating: the proof only
+verifies if your rebuilt trees hash to the on-chain roots.
 
 ```ts
-// commitments[]: all Deposit event commitments, ordered by leafIndex (from an indexer/logs)
+// `commitments`: all Deposit event commitments, ordered by leafIndex (from logs or an indexer).
 const stateTree = new PoolMerkleTree(crypto, commitments);
 const stateProof = stateTree.proof(record.leafIndex);
 
-// labels[]: the ASP's approved labels, ordered as the ASP publishes them
-const aspTree = new PoolMerkleTree(crypto, labels);
-const aspProof = aspTree.proof(labels.indexOf(record.label));
+// `deposits`: { label, leafIndex } from the same Deposit events. Under the default approve-all
+// policy the association set is these labels ordered by leafIndex, so rebuild it from chain and
+// pick the prefix matching the on-chain root. No dependency on the ASP server.
+const set = reconstructAspSetFromDeposits(crypto, deposits, currentAspRoot);
+if (!set) throw new Error("no association set matches the current aspRoot yet (deposit not yet approved/posted)");
+
+const aspIndex = aspIndexOf(set.aspLeaves, record.label);
+if (aspIndex < 0) throw new Error("your label is not in the current ASP set yet; wait for the next ASP update");
+```
+
+For a selective ASP policy, where the approved set is not derivable from chain, fetch the
+ASP's published opening through its ENS pointer instead, then verify it against the on-chain
+root:
+
+```ts
+import { resolveAspSetViaEns, aspSetFromManifest } from "@opaquecash/privacy-pool";
+
+const manifest = await resolveAspSetViaEns("evm-asp.opqtest.eth", {
+  ensGetText: (name, key) => publicClient.getEnsText({ name, key }),
+});
+const set = aspSetFromManifest(crypto, manifest, currentAspRoot); // throws if it does not match the root
+const aspIndex = aspIndexOf(set.aspLeaves, record.label);
 ```
 
 ### 4. Build the proof and withdraw
 
-The recipient is a **fresh stealth address**. The contract binds the payout into the
-proof via `context`, so read it from the contract and feed it to the witness:
+The recipient is a **fresh stealth address**. The contract binds the payout into the proof
+via `context`, so read it from the contract and feed it to the witness:
 
 ```ts
 const params = { recipient: freshStealthAddress, feeRecipient, fee: 0n };
@@ -196,7 +261,7 @@ const witness = buildWithdrawalWitness(crypto, {
   newNullifier: newNote.nullifier,
   newSecret: newNote.secret,
   stateLeaves: commitments, stateIndex: record.leafIndex,
-  aspLeaves: labels, aspIndex: labels.indexOf(record.label),
+  aspLeaves: set.aspLeaves, aspIndex,
   context: BigInt(context),
 });
 
@@ -211,12 +276,16 @@ await publicClient.waitForTransactionReceipt({ hash: wHash });
 // freshStealthAddress now holds withdrawnValue - fee, unlinked from the deposit.
 ```
 
+To submit without exposing your own gas wallet, hand `withdrawTx` to a relayer instead of
+sending it yourself (the recipient and fee are bound into the proof, so the relayer cannot
+redirect funds). See the [relayer market](/sdk/relayer-client).
+
 ### 5. Spend the remainder later
 
-The remainder (`record.value - withdrawnValue`) was re-inserted as a new commitment under
-the **same label** with `newNote`'s openings. Persist
+The remainder (`record.value - withdrawnValue`) was re-inserted as a new commitment under the
+**same label** with `newNote`'s openings. Persist
 `{ value: remainder, label: record.label, nullifier: newNote.nullifier, secret: newNote.secret, leafIndex: <new> }`
-and repeat from step 3 to withdraw it (no new ASP approval needed — the label is unchanged).
+and repeat from step 3 to withdraw it. No new ASP approval is needed, since the label is unchanged.
 
 ### What an observer sees
 
